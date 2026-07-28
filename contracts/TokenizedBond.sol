@@ -11,22 +11,22 @@ import {IBondToken} from "./interfaces/IBondToken.sol";
  * @title TokenizedBond
  * @notice Smart contract nghiệp vụ trung tâm cho hệ thống trái phiếu token hóa.
  *
- * Chức năng dự kiến:
- * - Whitelist nhà đầu tư.
+ * Phiên bản này bổ sung quy trình whitelist đầy đủ:
+ * - Investor tự gửi requestWhitelist().
+ * - Admin approve hoặc reject request.
+ * - Admin có thể revoke quyền của investor đã được duyệt.
+ *
+ * BondUSD được dùng để:
  * - Đăng ký mua trái phiếu.
- * - Escrow BondUSD.
- * - Finalize đợt phát hành.
- * - Issuer rút proceeds.
- * - Refund khi phát hành thất bại.
- * - Funding và claim coupon.
- * - Funding và redeem principal.
- * - Theo dõi default và cure default.
+ * - Hoàn tiền nếu offering thất bại.
+ * - Thanh toán coupon.
+ * - Hoàn trả principal.
  */
 contract TokenizedBond is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // =============================================================
-    //                           ENUMS
+    // ENUMS
     // =============================================================
 
     enum Lifecycle {
@@ -38,8 +38,16 @@ contract TokenizedBond is ReentrancyGuard {
         Closed
     }
 
+    enum WhitelistStatus {
+        None,
+        Pending,
+        Approved,
+        Rejected,
+        Revoked
+    }
+
     // =============================================================
-    //                           STRUCTS
+    // STRUCTS
     // =============================================================
 
     struct BondInfo {
@@ -101,15 +109,23 @@ contract TokenizedBond is ReentrancyGuard {
         uint256 defaultTimestamp;
     }
 
+    struct WhitelistInfo {
+        WhitelistStatus status;
+        bool isWhitelisted;
+        uint256 requestedAt;
+        uint256 reviewedAt;
+    }
+
     // =============================================================
-    //                        CUSTOM ERRORS
+    // CUSTOM ERRORS
     // =============================================================
 
-    // Phân quyền
+    // Roles
     error NotAdmin(address caller);
     error NotIssuer(address caller);
+    error RoleCannotRegister(address account);
 
-    // Địa chỉ và cấu hình
+    // Address and configuration
     error ZeroAddress();
     error AddressIsNotContract(address account);
     error RolesMustDiffer();
@@ -119,8 +135,13 @@ contract TokenizedBond is ReentrancyGuard {
     error InvalidLifecycle(Lifecycle current);
     error AlreadyClosed();
 
-    // Whitelist và pause
+    // Whitelist and pause
     error NotWhitelisted(address investor);
+    error InvalidWhitelistStatus(
+        address investor,
+        WhitelistStatus current
+    );
+    error ApplicantIndexOutOfBounds(uint256 index);
     error AlreadyPaused();
     error NotPaused();
     error SubscriptionIsPaused();
@@ -128,23 +149,20 @@ contract TokenizedBond is ReentrancyGuard {
     // Subscription
     error ZeroQuantity();
     error SubscriptionExpired();
-
     error MaxSupplyExceeded(
         uint256 requested,
         uint256 remaining
     );
-
     error InsufficientTokenBalance(
         uint256 required,
         uint256 available
     );
-
     error InsufficientAllowance(
         uint256 required,
         uint256 allowance
     );
 
-    // Finalize và proceeds
+    // Finalize and proceeds
     error CannotFinalizeYet();
     error ProceedsAlreadyWithdrawn();
 
@@ -166,7 +184,7 @@ contract TokenizedBond is ReentrancyGuard {
     error CouponsNotFullyClaimed();
     error PrincipalAlreadyRedeemed();
 
-    // Default và close
+    // Default and close
     error DefaultNotEligible();
     error DefaultAlreadyRecorded();
     error CloseConditionsNotMet();
@@ -175,9 +193,35 @@ contract TokenizedBond is ReentrancyGuard {
     error NativeTokenNotAccepted();
 
     // =============================================================
-    //                           EVENTS
+    // EVENTS
     // =============================================================
 
+    event WhitelistRequested(
+        address indexed investor,
+        uint256 requestedAt
+    );
+
+    event WhitelistApproved(
+        address indexed investor,
+        address indexed admin,
+        uint256 approvedAt
+    );
+
+    event WhitelistRejected(
+        address indexed investor,
+        address indexed admin,
+        uint256 rejectedAt
+    );
+
+    event WhitelistRevoked(
+        address indexed investor,
+        address indexed admin,
+        uint256 revokedAt
+    );
+
+    /**
+     * @dev Giữ event cũ để tương thích với log/audit đã xây dựng.
+     */
     event WhitelistUpdated(
         address indexed investor,
         bool approved
@@ -188,13 +232,8 @@ contract TokenizedBond is ReentrancyGuard {
         uint256 deadline
     );
 
-    event SubscriptionPaused(
-        uint256 pausedAt
-    );
-
-    event SubscriptionUnpaused(
-        uint256 unpausedAt
-    );
+    event SubscriptionPaused(uint256 pausedAt);
+    event SubscriptionUnpaused(uint256 unpausedAt);
 
     event BondSubscribed(
         address indexed investor,
@@ -252,9 +291,7 @@ contract TokenizedBond is ReentrancyGuard {
         uint256 recordedAt
     );
 
-    event PrincipalDefaultRecorded(
-        uint256 recordedAt
-    );
+    event PrincipalDefaultRecorded(uint256 recordedAt);
 
     event DefaultCured(
         uint8 indexed obligationType,
@@ -273,7 +310,7 @@ contract TokenizedBond is ReentrancyGuard {
     );
 
     // =============================================================
-    //                    ECONOMIC CONSTANTS
+    // ECONOMIC CONSTANTS
     // =============================================================
 
     string public constant BOND_NAME =
@@ -291,7 +328,7 @@ contract TokenizedBond is ReentrancyGuard {
     uint8 public constant COUPON_PERIOD_COUNT = 2;
 
     // =============================================================
-    //                       TIME CONSTANTS
+    // TIME CONSTANTS
     // =============================================================
 
     uint256 public constant SUBSCRIPTION_DURATION = 10 minutes;
@@ -300,7 +337,7 @@ contract TokenizedBond is ReentrancyGuard {
     uint256 public constant GRACE_PERIOD = 3 minutes;
 
     // =============================================================
-    //                     IMMUTABLE ADDRESSES
+    // IMMUTABLE ADDRESSES
     // =============================================================
 
     address public immutable admin;
@@ -310,14 +347,10 @@ contract TokenizedBond is ReentrancyGuard {
     IBondToken public immutable bondToken;
 
     // =============================================================
-    //                         LIFECYCLE
+    // LIFECYCLE AND OFFERING STORAGE
     // =============================================================
 
     Lifecycle public lifecycle;
-
-    // =============================================================
-    //                      SUBSCRIPTION STORAGE
-    // =============================================================
 
     bool public subscriptionPaused;
     bool public proceedsWithdrawn;
@@ -332,7 +365,7 @@ contract TokenizedBond is ReentrancyGuard {
     uint256 public totalRefunded;
 
     // =============================================================
-    //                         COUPON STORAGE
+    // COUPON STORAGE
     // =============================================================
 
     mapping(uint8 => uint256) public couponDue;
@@ -341,7 +374,7 @@ contract TokenizedBond is ReentrancyGuard {
     mapping(uint8 => uint256) public couponClaimedTotal;
 
     // =============================================================
-    //                       PRINCIPAL STORAGE
+    // PRINCIPAL STORAGE
     // =============================================================
 
     uint256 public principalRequired;
@@ -349,23 +382,27 @@ contract TokenizedBond is ReentrancyGuard {
     uint256 public principalRedeemedTotal;
 
     // =============================================================
-    //                        INVESTOR STORAGE
+    // INVESTOR AND WHITELIST STORAGE
     // =============================================================
 
     mapping(address => bool) public whitelisted;
+    mapping(address => WhitelistStatus) public whitelistStatus;
+    mapping(address => uint256) public whitelistRequestedAt;
+    mapping(address => uint256) public whitelistReviewedAt;
+
+    address[] private whitelistApplicants;
+    mapping(address => bool) private applicantRecorded;
 
     mapping(address => uint256) public subscribedQuantity;
     mapping(address => uint256) public paidAmount;
 
     mapping(address => bool) public refundClaimed;
-
     mapping(uint8 => mapping(address => bool))
         public couponClaimed;
-
     mapping(address => bool) public principalRedeemed;
 
     // =============================================================
-    //                         DEFAULT STORAGE
+    // DEFAULT STORAGE
     // =============================================================
 
     mapping(uint8 => bool) public couponDefaulted;
@@ -375,15 +412,9 @@ contract TokenizedBond is ReentrancyGuard {
     uint256 public principalDefaultedAt;
 
     // =============================================================
-    //                         CONSTRUCTOR
+    // CONSTRUCTOR
     // =============================================================
 
-    /**
-     * @param admin_ Địa chỉ quản trị whitelist và pause subscription.
-     * @param issuer_ Địa chỉ tổ chức phát hành trái phiếu.
-     * @param paymentToken_ Địa chỉ BondUSD hoặc MockBondUSD.
-     * @param bondToken_ Địa chỉ BondToken.
-     */
     constructor(
         address admin_,
         address issuer_,
@@ -423,7 +454,6 @@ contract TokenizedBond is ReentrancyGuard {
 
         admin = admin_;
         issuer = issuer_;
-
         paymentToken = IERC20(paymentToken_);
         bondToken = bondTokenContract;
 
@@ -432,7 +462,7 @@ contract TokenizedBond is ReentrancyGuard {
     }
 
     // =============================================================
-    //                          MODIFIERS
+    // MODIFIERS
     // =============================================================
 
     modifier onlyAdmin() {
@@ -458,102 +488,225 @@ contract TokenizedBond is ReentrancyGuard {
         }
         _;
     }
+
+    modifier whitelistLifecycleOpen() {
+        if (
+            lifecycle != Lifecycle.Draft &&
+            lifecycle != Lifecycle.SubscriptionOpen
+        ) {
+            revert InvalidLifecycle(lifecycle);
+        }
+        _;
+    }
+
     // =============================================================
-    //                       ADMIN FUNCTIONS
+    // WHITELIST FUNCTIONS
     // =============================================================
 
     /**
-     * @notice Thêm hoặc loại một investor khỏi whitelist.
+     * @notice Investor tự gửi yêu cầu tham gia whitelist.
      *
-     * Chỉ được thực hiện trước khi offering kết thúc:
-     * - Draft
-     * - SubscriptionOpen
+     * Admin và issuer không được đăng ký dưới vai trò investor.
+     * Một ví bị Rejected hoặc Revoked được phép đăng ký lại.
      */
-    function setWhitelist(
-        address investor,
-        bool approved
-    ) external onlyAdmin {
+    function requestWhitelist()
+        external
+        whitelistLifecycleOpen
+    {
+        if (
+            msg.sender == admin ||
+            msg.sender == issuer
+        ) {
+            revert RoleCannotRegister(msg.sender);
+        }
+
+        WhitelistStatus current =
+            whitelistStatus[msg.sender];
+
+        if (
+            current == WhitelistStatus.Pending ||
+            current == WhitelistStatus.Approved
+        ) {
+            revert InvalidWhitelistStatus(
+                msg.sender,
+                current
+            );
+        }
+
+        if (!applicantRecorded[msg.sender]) {
+            applicantRecorded[msg.sender] = true;
+            whitelistApplicants.push(msg.sender);
+        }
+
+        whitelistStatus[msg.sender] =
+            WhitelistStatus.Pending;
+
+        whitelisted[msg.sender] = false;
+        whitelistRequestedAt[msg.sender] =
+            block.timestamp;
+        whitelistReviewedAt[msg.sender] = 0;
+
+        emit WhitelistRequested(
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+    /**
+     * @notice Admin phê duyệt một request đang Pending.
+     */
+    function approveWhitelist(
+        address investor
+    )
+        external
+        onlyAdmin
+        whitelistLifecycleOpen
+    {
         if (investor == address(0)) {
             revert ZeroAddress();
         }
 
-        if (
-            lifecycle != Lifecycle.Draft &&
-            lifecycle != Lifecycle.SubscriptionOpen
-        ) {
-            revert InvalidLifecycle(lifecycle);
+        WhitelistStatus current =
+            whitelistStatus[investor];
+
+        if (current != WhitelistStatus.Pending) {
+            revert InvalidWhitelistStatus(
+                investor,
+                current
+            );
         }
 
-        whitelisted[investor] = approved;
+        whitelistStatus[investor] =
+            WhitelistStatus.Approved;
+        whitelisted[investor] = true;
+        whitelistReviewedAt[investor] =
+            block.timestamp;
 
-        emit WhitelistUpdated(investor, approved);
+        emit WhitelistApproved(
+            investor,
+            msg.sender,
+            block.timestamp
+        );
+
+        emit WhitelistUpdated(investor, true);
     }
 
     /**
-     * @notice Tạm dừng việc mở subscription hoặc nhận đăng ký mua mới.
-     *
-     * Pause chỉ có hiệu lực đối với:
-     * - openSubscription()
-     * - subscribe()
-     *
-     * Pause không chặn các quyền tài chính đã hình thành như refund,
-     * coupon claim hoặc principal redemption.
+     * @notice Admin từ chối một request đang Pending.
      */
+    function rejectWhitelist(
+        address investor
+    )
+        external
+        onlyAdmin
+        whitelistLifecycleOpen
+    {
+        if (investor == address(0)) {
+            revert ZeroAddress();
+        }
+
+        WhitelistStatus current =
+            whitelistStatus[investor];
+
+        if (current != WhitelistStatus.Pending) {
+            revert InvalidWhitelistStatus(
+                investor,
+                current
+            );
+        }
+
+        whitelistStatus[investor] =
+            WhitelistStatus.Rejected;
+        whitelisted[investor] = false;
+        whitelistReviewedAt[investor] =
+            block.timestamp;
+
+        emit WhitelistRejected(
+            investor,
+            msg.sender,
+            block.timestamp
+        );
+
+        emit WhitelistUpdated(investor, false);
+    }
+
+    /**
+     * @notice Admin thu hồi quyền của investor đã Approved.
+     *
+     * Việc revoke không làm mất các quyền tài chính đã phát sinh.
+     * Investor vẫn có thể refund, claim coupon và redeem principal
+     * cho vị thế đã mua trước đó.
+     */
+    function revokeWhitelist(
+        address investor
+    )
+        external
+        onlyAdmin
+        whitelistLifecycleOpen
+    {
+        if (investor == address(0)) {
+            revert ZeroAddress();
+        }
+
+        WhitelistStatus current =
+            whitelistStatus[investor];
+
+        if (current != WhitelistStatus.Approved) {
+            revert InvalidWhitelistStatus(
+                investor,
+                current
+            );
+        }
+
+        whitelistStatus[investor] =
+            WhitelistStatus.Revoked;
+        whitelisted[investor] = false;
+        whitelistReviewedAt[investor] =
+            block.timestamp;
+
+        emit WhitelistRevoked(
+            investor,
+            msg.sender,
+            block.timestamp
+        );
+
+        emit WhitelistUpdated(investor, false);
+    }
+
+    // =============================================================
+    // ADMIN FUNCTIONS
+    // =============================================================
+
     function pauseSubscription()
         external
         onlyAdmin
+        whitelistLifecycleOpen
     {
-        if (
-            lifecycle != Lifecycle.Draft &&
-            lifecycle != Lifecycle.SubscriptionOpen
-        ) {
-            revert InvalidLifecycle(lifecycle);
-        }
-
         if (subscriptionPaused) {
             revert AlreadyPaused();
         }
 
         subscriptionPaused = true;
-
         emit SubscriptionPaused(block.timestamp);
     }
 
-    /**
-     * @notice Mở lại subscription sau khi admin đã pause.
-     */
     function unpauseSubscription()
         external
         onlyAdmin
+        whitelistLifecycleOpen
     {
-        if (
-            lifecycle != Lifecycle.Draft &&
-            lifecycle != Lifecycle.SubscriptionOpen
-        ) {
-            revert InvalidLifecycle(lifecycle);
-        }
-
         if (!subscriptionPaused) {
             revert NotPaused();
         }
 
         subscriptionPaused = false;
-
         emit SubscriptionUnpaused(block.timestamp);
     }
 
     // =============================================================
-    //                       ISSUER FUNCTIONS
+    // ISSUER FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Issuer chính thức mở đợt đăng ký mua trái phiếu.
-     *
-     * Điều kiện:
-     * - Chỉ issuer được gọi.
-     * - Lifecycle phải là Draft.
-     * - Subscription không bị admin pause.
-     */
     function openSubscription()
         external
         onlyIssuer
@@ -581,23 +734,11 @@ contract TokenizedBond is ReentrancyGuard {
             subscriptionDeadline
         );
     }
+
     // =============================================================
-    //                      INVESTOR FUNCTIONS
+    // INVESTOR FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Investor đăng ký mua trái phiếu bằng BondUSD.
-     *
-     * Quy trình:
-     * 1. Kiểm tra lifecycle, pause, whitelist và deadline.
-     * 2. Kiểm tra số lượng còn lại.
-     * 3. Kiểm tra BondUSD balance và allowance.
-     * 4. Cập nhật dữ liệu subscription.
-     * 5. Thu BondUSD vào escrow.
-     * 6. Mint BondToken cho investor.
-     *
-     * @param quantity Số lượng trái phiếu muốn mua.
-     */
     function subscribe(
         uint256 quantity
     )
@@ -660,14 +801,11 @@ contract TokenizedBond is ReentrancyGuard {
             );
         }
 
-        // Effects
         subscribedQuantity[msg.sender] += quantity;
         paidAmount[msg.sender] += payment;
-
         totalSubscribed += quantity;
         totalRaised += payment;
 
-        // Interactions
         paymentToken.safeTransferFrom(
             msg.sender,
             address(this),
@@ -688,21 +826,10 @@ contract TokenizedBond is ReentrancyGuard {
         );
     }
 
-        // =============================================================
-    //                  PERMISSIONLESS FUNCTIONS
+    // =============================================================
+    // PERMISSIONLESS FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Chốt kết quả đợt phát hành.
-     *
-     * Bất kỳ tài khoản nào cũng được gọi khi:
-     * - Đã bán hết MAX_BOND_SUPPLY; hoặc
-     * - Đã hết subscription deadline.
-     *
-     * Kết quả:
-     * - totalSubscribed >= MINIMUM_SUBSCRIPTION: Active.
-     * - totalSubscribed < MINIMUM_SUBSCRIPTION: Failed.
-     */
     function finalizeOffering() external {
         if (lifecycle != Lifecycle.SubscriptionOpen) {
             revert InvalidLifecycle(lifecycle);
@@ -728,7 +855,6 @@ contract TokenizedBond is ReentrancyGuard {
 
             couponDue[1] =
                 finalizedAt + COUPON_1_DELAY;
-
             couponDue[2] =
                 finalizedAt + COUPON_2_DELAY;
 
@@ -736,7 +862,6 @@ contract TokenizedBond is ReentrancyGuard {
 
             couponRequired[1] =
                 totalSubscribed * COUPON_PER_PERIOD;
-
             couponRequired[2] =
                 totalSubscribed * COUPON_PER_PERIOD;
 
@@ -754,19 +879,11 @@ contract TokenizedBond is ReentrancyGuard {
             finalizedAt
         );
     }
+
     // =============================================================
-    //                  PROCEEDS AND REFUND FUNCTIONS
+    // PROCEEDS AND REFUND FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Issuer rút toàn bộ BondUSD huy động được
-     * sau khi đợt phát hành thành công.
-     *
-     * Điều kiện:
-     * - Chỉ issuer được gọi.
-     * - Lifecycle phải là Active hoặc Matured.
-     * - Proceeds chưa được rút trước đó.
-     */
     function withdrawProceeds()
         external
         onlyIssuer
@@ -784,7 +901,6 @@ contract TokenizedBond is ReentrancyGuard {
         }
 
         uint256 amount = totalRaised;
-
         proceedsWithdrawn = true;
 
         paymentToken.safeTransfer(
@@ -798,18 +914,6 @@ contract TokenizedBond is ReentrancyGuard {
         );
     }
 
-    /**
-     * @notice Investor nhận lại BondUSD nếu đợt phát hành thất bại.
-     *
-     * Quy trình:
-     * 1. Kiểm tra lifecycle Failed.
-     * 2. Xác định số BondUSD cần hoàn trả.
-     * 3. Đánh dấu investor đã refund.
-     * 4. Burn toàn bộ BondToken của investor.
-     * 5. Chuyển BondUSD từ escrow về investor.
-     *
-     * Whitelist và pause không ảnh hưởng đến quyền refund.
-     */
     function claimRefund()
         external
         nonReentrant
@@ -835,11 +939,9 @@ contract TokenizedBond is ReentrancyGuard {
             revert NothingToRefund();
         }
 
-        // Effects
         refundClaimed[msg.sender] = true;
         totalRefunded += refundAmount;
 
-        // Interactions
         bondToken.burn(
             msg.sender,
             quantity
@@ -856,20 +958,11 @@ contract TokenizedBond is ReentrancyGuard {
             refundAmount
         );
     }
+
     // =============================================================
-    //                       COUPON FUNCTIONS
+    // COUPON FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Issuer nộp đầy đủ BondUSD cho một kỳ coupon.
-     *
-     * Không truyền amount từ bên ngoài. Contract tự lấy đúng số tiền
-     * đã được xác định khi finalize offering.
-     *
-     * Issuer có thể funding coupon trước ngày đến hạn.
-     *
-     * @param period Kỳ coupon, chỉ nhận giá trị 1 hoặc 2.
-     */
     function depositCoupon(
         uint8 period
     )
@@ -915,7 +1008,6 @@ contract TokenizedBond is ReentrancyGuard {
             );
         }
 
-        // Effects
         couponFunded[period] = requiredAmount;
 
         bool curedDefault =
@@ -925,7 +1017,6 @@ contract TokenizedBond is ReentrancyGuard {
             couponDefaulted[period] = false;
         }
 
-        // Interaction
         paymentToken.safeTransferFrom(
             issuer,
             address(this),
@@ -947,15 +1038,6 @@ contract TokenizedBond is ReentrancyGuard {
         }
     }
 
-    /**
-     * @notice Investor nhận coupon của một kỳ đã đến hạn.
-     *
-     * Coupon của investor:
-     *
-     * BondToken balance × COUPON_PER_PERIOD
-     *
-     * @param period Kỳ coupon, chỉ nhận giá trị 1 hoặc 2.
-     */
     function claimCoupon(
         uint8 period
     )
@@ -995,13 +1077,9 @@ contract TokenizedBond is ReentrancyGuard {
         uint256 couponAmount =
             quantity * COUPON_PER_PERIOD;
 
-        // Effects
         couponClaimed[period][msg.sender] = true;
+        couponClaimedTotal[period] += couponAmount;
 
-        couponClaimedTotal[period] +=
-            couponAmount;
-
-        // Interaction
         paymentToken.safeTransfer(
             msg.sender,
             couponAmount
@@ -1014,16 +1092,11 @@ contract TokenizedBond is ReentrancyGuard {
             couponAmount
         );
     }
+
     // =============================================================
-    //                 PRINCIPAL AND MATURITY FUNCTIONS
+    // PRINCIPAL AND MATURITY FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Issuer nộp đầy đủ BondUSD để hoàn trả tiền gốc.
-     *
-     * Issuer được phép funding principal trước hoặc sau maturity.
-     * Contract tự lấy đúng principalRequired, không cho nhập amount.
-     */
     function depositPrincipal()
         external
         onlyIssuer
@@ -1066,7 +1139,6 @@ contract TokenizedBond is ReentrancyGuard {
             );
         }
 
-        // Effects
         principalFunded = requiredAmount;
 
         bool curedDefault =
@@ -1076,7 +1148,6 @@ contract TokenizedBond is ReentrancyGuard {
             principalDefaulted = false;
         }
 
-        // Interaction
         paymentToken.safeTransferFrom(
             issuer,
             address(this),
@@ -1097,11 +1168,6 @@ contract TokenizedBond is ReentrancyGuard {
         }
     }
 
-    /**
-     * @notice Chuyển lifecycle từ Active sang Matured.
-     *
-     * Bất kỳ địa chỉ nào cũng được gọi sau ngày đáo hạn.
-     */
     function markMatured() external {
         if (lifecycle != Lifecycle.Active) {
             revert InvalidLifecycle(lifecycle);
@@ -1114,17 +1180,6 @@ contract TokenizedBond is ReentrancyGuard {
         _syncMaturity();
     }
 
-    /**
-     * @notice Investor hoàn trả BondToken và nhận lại tiền gốc.
-     *
-     * Điều kiện:
-     * - Đã đến maturity.
-     * - Principal đã được issuer funding.
-     * - Investor đã claim Coupon 1.
-     * - Investor đã claim Coupon 2.
-     * - Investor chưa redeem trước đó.
-     * - Investor đang sở hữu BondToken.
-     */
     function redeemPrincipal()
         external
         nonReentrant
@@ -1136,8 +1191,6 @@ contract TokenizedBond is ReentrancyGuard {
             revert InvalidLifecycle(lifecycle);
         }
 
-        // Nếu đã đến maturity nhưng chưa ai gọi markMatured(),
-        // contract tự đồng bộ lifecycle.
         _syncMaturity();
 
         if (lifecycle != Lifecycle.Matured) {
@@ -1172,13 +1225,9 @@ contract TokenizedBond is ReentrancyGuard {
         uint256 principalAmount =
             quantity * FACE_VALUE;
 
-        // Effects
         principalRedeemed[msg.sender] = true;
+        principalRedeemedTotal += principalAmount;
 
-        principalRedeemedTotal +=
-            principalAmount;
-
-        // Interactions
         bondToken.burn(
             msg.sender,
             quantity
@@ -1195,21 +1244,11 @@ contract TokenizedBond is ReentrancyGuard {
             principalAmount
         );
     }
+
     // =============================================================
-    //                  DEFAULT AND CLOSING FUNCTIONS
+    // DEFAULT AND CLOSING FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Ghi nhận default đối với một kỳ coupon.
-     *
-     * Default chỉ được ghi nhận khi:
-     * - Bond đang Active hoặc Matured.
-     * - Đã quá ngày đến hạn cộng grace period.
-     * - Issuer chưa funding đầy đủ coupon.
-     * - Default của kỳ đó chưa được ghi nhận trước đây.
-     *
-     * @param period Kỳ coupon, chỉ nhận 1 hoặc 2.
-     */
     function markCouponDefault(
         uint8 period
     )
@@ -1252,18 +1291,7 @@ contract TokenizedBond is ReentrancyGuard {
         );
     }
 
-    /**
-     * @notice Ghi nhận default đối với nghĩa vụ hoàn trả principal.
-     *
-     * Default chỉ được ghi nhận khi:
-     * - Bond đang Active hoặc Matured.
-     * - Đã quá maturity cộng grace period.
-     * - Issuer chưa funding đầy đủ principal.
-     * - Principal default chưa được ghi nhận trước đây.
-     */
-    function markPrincipalDefault()
-        external
-    {
+    function markPrincipalDefault() external {
         if (
             lifecycle != Lifecycle.Active &&
             lifecycle != Lifecycle.Matured
@@ -1290,8 +1318,6 @@ contract TokenizedBond is ReentrancyGuard {
             revert DefaultNotEligible();
         }
 
-        // Nếu thời gian maturity đã đến nhưng lifecycle vẫn Active,
-        // tự động chuyển lifecycle sang Matured.
         _syncMaturity();
 
         principalDefaulted = true;
@@ -1303,23 +1329,7 @@ contract TokenizedBond is ReentrancyGuard {
         );
     }
 
-    /**
-     * @notice Đóng hoàn toàn trái phiếu sau khi mọi nghĩa vụ
-     * của nhánh tương ứng đã được xử lý.
-     *
-     * Nhánh Failed:
-     * - Toàn bộ BondUSD đã được refund.
-     * - BondToken total supply bằng 0.
-     *
-     * Nhánh thành công:
-     * - Lifecycle đã Matured.
-     * - Issuer đã rút toàn bộ proceeds.
-     * - Toàn bộ principal đã được redeem.
-     * - BondToken total supply bằng 0.
-     */
-    function closeBond()
-        external
-    {
+    function closeBond() external {
         if (lifecycle == Lifecycle.Closed) {
             revert AlreadyClosed();
         }
@@ -1358,12 +1368,9 @@ contract TokenizedBond is ReentrancyGuard {
     }
 
     // =============================================================
-    //                         VIEW FUNCTIONS
+    // VIEW FUNCTIONS
     // =============================================================
 
-    /**
-     * @notice Trả về thông tin cấu hình cố định của trái phiếu.
-     */
     function getBondInfo()
         external
         view
@@ -1378,16 +1385,15 @@ contract TokenizedBond is ReentrancyGuard {
             faceValue: FACE_VALUE,
             issuePrice: ISSUE_PRICE,
             maxSupply: MAX_BOND_SUPPLY,
-            minimumSubscription: MINIMUM_SUBSCRIPTION,
-            annualCouponRateBps: ANNUAL_COUPON_RATE_BPS,
+            minimumSubscription:
+                MINIMUM_SUBSCRIPTION,
+            annualCouponRateBps:
+                ANNUAL_COUPON_RATE_BPS,
             couponPerPeriod: COUPON_PER_PERIOD,
             gracePeriod: GRACE_PERIOD
         });
     }
 
-    /**
-     * @notice Trả về trạng thái của đợt phát hành.
-     */
     function getOfferingInfo()
         external
         view
@@ -1402,16 +1408,11 @@ contract TokenizedBond is ReentrancyGuard {
             subscribed: totalSubscribed,
             raised: totalRaised,
             refunded: totalRefunded,
-            proceedsAreWithdrawn: proceedsWithdrawn
+            proceedsAreWithdrawn:
+                proceedsWithdrawn
         });
     }
 
-    /**
-     * @notice Trả về toàn bộ vị thế của một investor.
-     *
-     * claimableCouponTotal là tổng coupon hiện đang có thể claim
-     * của cả kỳ 1 và kỳ 2.
-     */
     function getInvestorPosition(
         address investor
     )
@@ -1447,9 +1448,6 @@ contract TokenizedBond is ReentrancyGuard {
         });
     }
 
-    /**
-     * @notice Trả về thông tin của một kỳ coupon.
-     */
     function getCouponInfo(
         uint8 period
     )
@@ -1473,9 +1471,6 @@ contract TokenizedBond is ReentrancyGuard {
         });
     }
 
-    /**
-     * @notice Trả về trạng thái nghĩa vụ hoàn trả principal.
-     */
     function getPrincipalInfo()
         external
         view
@@ -1493,17 +1488,59 @@ contract TokenizedBond is ReentrancyGuard {
         });
     }
 
+    function getWhitelistApplicantCount()
+        external
+        view
+        returns (uint256)
+    {
+        return whitelistApplicants.length;
+    }
+
+    function getWhitelistApplicantAt(
+        uint256 index
+    )
+        external
+        view
+        returns (address)
+    {
+        if (index >= whitelistApplicants.length) {
+            revert ApplicantIndexOutOfBounds(index);
+        }
+
+        return whitelistApplicants[index];
+    }
+
+    function getWhitelistStatus(
+        address investor
+    )
+        external
+        view
+        returns (WhitelistStatus)
+    {
+        return whitelistStatus[investor];
+    }
+
+    function getWhitelistInfo(
+        address investor
+    )
+        external
+        view
+        returns (WhitelistInfo memory)
+    {
+        return WhitelistInfo({
+            status: whitelistStatus[investor],
+            isWhitelisted: whitelisted[investor],
+            requestedAt:
+                whitelistRequestedAt[investor],
+            reviewedAt:
+                whitelistReviewedAt[investor]
+        });
+    }
+
     // =============================================================
-    //                         VIEW HELPERS
+    // VIEW HELPERS
     // =============================================================
 
-    /**
-     * @notice Tính coupon mà investor hiện có thể claim
-     * đối với một kỳ.
-     *
-     * Trả về 0 nếu chưa đến hạn, chưa funding, đã claim
-     * hoặc investor không có BondToken.
-     */
     function getClaimableCoupon(
         address investor,
         uint8 period
@@ -1546,9 +1583,6 @@ contract TokenizedBond is ReentrancyGuard {
         return quantity * COUPON_PER_PERIOD;
     }
 
-    /**
-     * @notice Trả về số BondUSD investor hiện có thể refund.
-     */
     function getRefundAmount(
         address investor
     )
@@ -1567,15 +1601,6 @@ contract TokenizedBond is ReentrancyGuard {
         return paidAmount[investor];
     }
 
-    /**
-     * @notice Trả về principal mà investor hiện có thể redeem.
-     *
-     * Trả về 0 nếu:
-     * - Chưa maturity.
-     * - Principal chưa funding.
-     * - Investor chưa claim đủ coupon.
-     * - Investor đã redeem.
-     */
     function getPrincipalAmount(
         address investor
     )
@@ -1623,9 +1648,6 @@ contract TokenizedBond is ReentrancyGuard {
         return quantity * FACE_VALUE;
     }
 
-    /**
-     * @notice Kiểm tra subscription hiện có nhận đăng ký mới hay không.
-     */
     function isSubscriptionOpen()
         public
         view
@@ -1641,12 +1663,6 @@ contract TokenizedBond is ReentrancyGuard {
                 MAX_BOND_SUPPLY;
     }
 
-    /**
-     * @notice Kiểm tra có nghĩa vụ nào đang trong trạng thái default.
-     *
-     * Sau khi issuer cure default, hàm sẽ trở về false.
-     * Timestamp lịch sử default vẫn được giữ.
-     */
     function isDefaulted()
         public
         view
@@ -1658,9 +1674,6 @@ contract TokenizedBond is ReentrancyGuard {
             principalDefaulted;
     }
 
-    /**
-     * @notice Kiểm tra offering đã đủ điều kiện finalize hay chưa.
-     */
     function canFinalize()
         public
         view
@@ -1684,9 +1697,6 @@ contract TokenizedBond is ReentrancyGuard {
         return soldOut || deadlineReached;
     }
 
-    /**
-     * @notice Kiểm tra contract đã đủ điều kiện close hay chưa.
-     */
     function canClose()
         public
         view
@@ -1713,14 +1723,9 @@ contract TokenizedBond is ReentrancyGuard {
     }
 
     // =============================================================
-    //                       INTERNAL FUNCTIONS
+    // INTERNAL FUNCTIONS
     // =============================================================
 
-    /**
-     * @dev Tự động chuyển Active sang Matured khi đã đến maturity.
-     *
-     * Hàm không revert nếu chưa đến maturity; nó chỉ không làm gì.
-     */
     function _syncMaturity() internal {
         if (
             lifecycle == Lifecycle.Active &&
@@ -1734,15 +1739,11 @@ contract TokenizedBond is ReentrancyGuard {
             );
         }
     }
-                    
+
     // =============================================================
-    //                    NATIVE TOKEN RESTRICTION
+    // NATIVE TOKEN RESTRICTION
     // =============================================================
 
-    /**
-     * @notice Contract không nhận ETH.
-     * Toàn bộ thanh toán được thực hiện bằng BondUSD.
-     */
     receive() external payable {
         revert NativeTokenNotAccepted();
     }
