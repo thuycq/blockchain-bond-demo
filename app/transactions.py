@@ -5,7 +5,6 @@ from typing import Any
 from uuid import uuid4
 
 from web3 import Web3
-from web3.contract import Contract
 from web3.exceptions import (
     ContractLogicError,
     TimeExhausted,
@@ -189,7 +188,7 @@ def _safe_error_message(
 def _get_contract(
     client: BlockchainClient,
     contract_name: str,
-) -> Contract:
+) -> Any:
     if contract_name == "bond_usd":
         return client.bond_usd
 
