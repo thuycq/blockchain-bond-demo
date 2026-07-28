@@ -4,208 +4,348 @@ const path = require("path");
 
 const { ethers } = hre;
 
-async function waitForSuccess(transaction, label) {
-    console.log(`${label} tx:`, transaction.hash);
+const SEPOLIA_CHAIN_ID = 11155111n;
 
-    const receipt = await transaction.wait();
-
-    if (!receipt || receipt.status !== 1) {
-        throw new Error(`${label} transaction failed.`);
+function assertEqual(actual, expected, label) {
+    if (actual !== expected) {
+        throw new Error(
+            `${label} mismatch.\n` +
+            `Expected: ${expected}\n` +
+            `Actual:   ${actual}`
+        );
     }
+}
 
-    console.log(`${label}: successful`);
+function assertAddressEqual(actual, expected, label) {
+    const actualChecksum =
+        ethers.getAddress(actual);
 
-    return {
-        transactionHash: transaction.hash,
-        blockNumber: receipt.blockNumber,
-        gasUsed: receipt.gasUsed.toString(),
-    };
+    const expectedChecksum =
+        ethers.getAddress(expected);
+
+    if (actualChecksum !== expectedChecksum) {
+        throw new Error(
+            `${label} mismatch.\n` +
+            `Expected: ${expectedChecksum}\n` +
+            `Actual:   ${actualChecksum}`
+        );
+    }
 }
 
 async function main() {
-    console.log("====================================================");
-    console.log("BOND 5 - PREPARE SEPOLIA BASE DEPLOYMENT");
-    console.log("====================================================");
-
-    const deploymentPath = path.join(
-        __dirname,
-        "..",
-        "deployment",
-        "sepolia.json"
+    console.log(
+        "===================================================="
     );
+    console.log(
+        "BOND 7 - VALIDATE CLEAN SEPOLIA BASE"
+    );
+    console.log(
+        "===================================================="
+    );
+
+    const deploymentPath =
+        path.join(
+            __dirname,
+            "..",
+            "deployment",
+            "sepolia.json"
+        );
 
     if (!fs.existsSync(deploymentPath)) {
         throw new Error(
-            `Deployment file not found: ${deploymentPath}`
+            `Deployment file not found: ` +
+            `${deploymentPath}`
         );
     }
 
-    const deployment = JSON.parse(
-        fs.readFileSync(deploymentPath, "utf8")
-    );
+    const deployment =
+        JSON.parse(
+            fs.readFileSync(
+                deploymentPath,
+                "utf8"
+            )
+        );
 
-    const tokenizedBondAddress =
-        deployment.contracts.TokenizedBond.address;
+    const network =
+        await ethers.provider.getNetwork();
 
-    const bondTokenAddress =
-        deployment.contracts.BondToken.address;
-
-    const expectedAdmin =
-        ethers.getAddress(deployment.roles.admin);
-
-    const investor1 =
-        ethers.getAddress(deployment.roles.investor1);
-
-    const investor2 =
-        ethers.getAddress(deployment.roles.investor2);
-
-    const network = await ethers.provider.getNetwork();
-
-    if (network.chainId !== 11155111n) {
+    if (
+        network.chainId !==
+        SEPOLIA_CHAIN_ID
+    ) {
         throw new Error(
-            `Wrong network. Expected Sepolia chain ID 11155111, ` +
+            `Wrong network. Expected Sepolia ` +
+            `chain ID ${SEPOLIA_CHAIN_ID}, ` +
             `received ${network.chainId}.`
         );
     }
 
-    const [adminSigner] = await ethers.getSigners();
+    const [adminSigner] =
+        await ethers.getSigners();
 
-    const adminAddress = ethers.getAddress(
-        await adminSigner.getAddress()
-    );
-
-    if (adminAddress !== expectedAdmin) {
+    if (!adminSigner) {
         throw new Error(
-            `Wrong admin signer.\n` +
-            `Expected: ${expectedAdmin}\n` +
-            `Actual:   ${adminAddress}`
+            "No signer is available."
         );
     }
 
-    const tokenizedBond = await ethers.getContractAt(
-        "TokenizedBond",
+    const adminAddress =
+        ethers.getAddress(
+            await adminSigner.getAddress()
+        );
+
+    const expectedAdmin =
+        ethers.getAddress(
+            deployment.roles.admin
+        );
+
+    assertAddressEqual(
+        adminAddress,
+        expectedAdmin,
+        "Admin signer"
+    );
+
+    const tokenizedBondAddress =
+        deployment
+            .contracts
+            .TokenizedBond
+            .address;
+
+    const bondTokenAddress =
+        deployment
+            .contracts
+            .BondToken
+            .address;
+
+    const tokenizedBond =
+        await ethers.getContractAt(
+            "TokenizedBond",
+            tokenizedBondAddress,
+            adminSigner
+        );
+
+    const bondToken =
+        await ethers.getContractAt(
+            "BondToken",
+            bondTokenAddress,
+            adminSigner
+        );
+
+    const [
+        lifecycle,
+        subscriptionPaused,
+        subscriptionStart,
+        subscriptionDeadline,
+        totalSubscribed,
+        totalRaised,
+        totalRefunded,
+        proceedsWithdrawn,
+        applicantCount,
+        supply,
+        controller,
+        owner,
+    ] = await Promise.all([
+        tokenizedBond.lifecycle(),
+        tokenizedBond.subscriptionPaused(),
+        tokenizedBond.subscriptionStart(),
+        tokenizedBond.subscriptionDeadline(),
+        tokenizedBond.totalSubscribed(),
+        tokenizedBond.totalRaised(),
+        tokenizedBond.totalRefunded(),
+        tokenizedBond.proceedsWithdrawn(),
+        tokenizedBond
+            .getWhitelistApplicantCount(),
+        bondToken.totalSupply(),
+        bondToken.controller(),
+        bondToken.owner(),
+    ]);
+
+    assertEqual(
+        lifecycle,
+        0n,
+        "Lifecycle"
+    );
+
+    assertEqual(
+        subscriptionPaused,
+        false,
+        "Subscription paused"
+    );
+
+    assertEqual(
+        subscriptionStart,
+        0n,
+        "Subscription start"
+    );
+
+    assertEqual(
+        subscriptionDeadline,
+        0n,
+        "Subscription deadline"
+    );
+
+    assertEqual(
+        totalSubscribed,
+        0n,
+        "Total subscribed"
+    );
+
+    assertEqual(
+        totalRaised,
+        0n,
+        "Total raised"
+    );
+
+    assertEqual(
+        totalRefunded,
+        0n,
+        "Total refunded"
+    );
+
+    assertEqual(
+        proceedsWithdrawn,
+        false,
+        "Proceeds withdrawn"
+    );
+
+    assertEqual(
+        applicantCount,
+        0n,
+        "Whitelist applicant count"
+    );
+
+    assertEqual(
+        supply,
+        0n,
+        "BondToken supply"
+    );
+
+    assertAddressEqual(
+        controller,
         tokenizedBondAddress,
-        adminSigner
+        "BondToken controller"
     );
 
-    const bondToken = await ethers.getContractAt(
-        "BondToken",
-        bondTokenAddress,
-        adminSigner
+    assertEqual(
+        owner,
+        ethers.ZeroAddress,
+        "BondToken owner"
     );
 
-    const lifecycleBefore =
-        await tokenizedBond.lifecycle();
-
-    const supplyBefore =
-        await bondToken.totalSupply();
-
-    if (lifecycleBefore !== 0n) {
-        throw new Error(
-            `Base deployment is no longer in Draft. ` +
-            `Lifecycle: ${lifecycleBefore}`
-        );
-    }
-
-    if (supplyBefore !== 0n) {
-        throw new Error(
-            `Base BondToken supply must be zero. ` +
-            `Actual supply: ${supplyBefore}`
-        );
-    }
-
-    console.log("\n1. Base deployment");
-    console.log("Admin:         ", adminAddress);
-    console.log("TokenizedBond: ", tokenizedBondAddress);
-    console.log("BondToken:     ", bondTokenAddress);
-    console.log("Lifecycle:     ", lifecycleBefore.toString());
-    console.log("Bond supply:   ", supplyBefore.toString());
-
-    console.log("\n2. Whitelisting Investor 1");
-
-    const investor1Tx =
-        await tokenizedBond.setWhitelist(
-            investor1,
-            true
-        );
-
-    const investor1Result =
-        await waitForSuccess(
-            investor1Tx,
-            "Investor 1 whitelist"
-        );
-
-    console.log("\n3. Whitelisting Investor 2");
-
-    const investor2Tx =
-        await tokenizedBond.setWhitelist(
-            investor2,
-            true
-        );
-
-    const investor2Result =
-        await waitForSuccess(
-            investor2Tx,
-            "Investor 2 whitelist"
-        );
-
-    const lifecycleAfter =
-        await tokenizedBond.lifecycle();
-
-    const supplyAfter =
-        await bondToken.totalSupply();
-
-    if (lifecycleAfter !== 0n) {
-        throw new Error(
-            `Lifecycle changed unexpectedly. ` +
-            `Actual lifecycle: ${lifecycleAfter}`
-        );
-    }
-
-    if (supplyAfter !== 0n) {
-        throw new Error(
-            `BondToken supply changed unexpectedly. ` +
-            `Actual supply: ${supplyAfter}`
-        );
-    }
-
-    deployment.basePreparation = {
-        preparedAt: new Date().toISOString(),
-
-        investor1Whitelist: investor1Result,
-
-        investor2Whitelist: investor2Result,
-
+    deployment.cleanBaseValidation = {
+        validatedAt:
+            new Date().toISOString(),
+        readOnlyValidation: true,
+        transactionsSent: 0,
         finalState: {
-            lifecycle: lifecycleAfter.toString(),
+            lifecycle:
+                lifecycle.toString(),
             lifecycleName: "Draft",
+            subscriptionPaused,
+            subscriptionStart:
+                subscriptionStart.toString(),
+            subscriptionDeadline:
+                subscriptionDeadline.toString(),
+            totalSubscribed:
+                totalSubscribed.toString(),
+            totalRaised:
+                totalRaised.toString(),
+            totalRefunded:
+                totalRefunded.toString(),
+            proceedsWithdrawn,
+            whitelistApplicantCount:
+                applicantCount.toString(),
+            whitelistInitiallyEmpty:
+                applicantCount === 0n,
             bondTokenTotalSupply:
-                supplyAfter.toString(),
+                supply.toString(),
+            bondTokenController:
+                ethers.getAddress(
+                    controller
+                ),
+            bondTokenOwner: owner,
         },
     };
 
     fs.writeFileSync(
         deploymentPath,
-        JSON.stringify(deployment, null, 2),
+        JSON.stringify(
+            deployment,
+            null,
+            2
+        ),
         "utf8"
     );
 
-    console.log("\n4. Final base state");
-    console.log("Investor 1:    ", investor1);
-    console.log("Investor 2:    ", investor2);
-    console.log("Lifecycle:     ", lifecycleAfter.toString());
-    console.log("Bond supply:   ", supplyAfter.toString());
+    console.log(
+        "\n1. Clean deployment"
+    );
+    console.log(
+        "Admin:                 ",
+        adminAddress
+    );
+    console.log(
+        "TokenizedBond:         ",
+        tokenizedBondAddress
+    );
+    console.log(
+        "BondToken:             ",
+        bondTokenAddress
+    );
 
-    console.log("\nDeployment file updated:");
-    console.log(deploymentPath);
+    console.log(
+        "\n2. Clean base state"
+    );
+    console.log(
+        "Lifecycle:              Draft"
+    );
+    console.log(
+        "Subscription paused:    false"
+    );
+    console.log(
+        "Whitelist applicants:   0"
+    );
+    console.log(
+        "Total subscribed:       0"
+    );
+    console.log(
+        "Total raised:           0"
+    );
+    console.log(
+        "BondToken supply:       0"
+    );
+    console.log(
+        "Transactions sent:      0"
+    );
 
-    console.log("\n====================================================");
-    console.log("SEPOLIA BASE PREPARATION COMPLETED");
-    console.log("====================================================");
-    console.log("Base contract remains in Draft.");
-    console.log("Subscription has NOT been opened.");
-    console.log("No BondToken has been minted.");
-    console.log("====================================================");
+    console.log(
+        "\nDeployment file updated:"
+    );
+    console.log(
+        deploymentPath
+    );
+
+    console.log(
+        "\n===================================================="
+    );
+    console.log(
+        "CLEAN SEPOLIA BASE VALIDATION PASSED"
+    );
+    console.log(
+        "===================================================="
+    );
+    console.log(
+        "No investor was registered."
+    );
+    console.log(
+        "No investor was whitelisted."
+    );
+    console.log(
+        "No blockchain transaction was sent."
+    );
+    console.log(
+        "===================================================="
+    );
 }
 
 main()
@@ -213,7 +353,9 @@ main()
         process.exitCode = 0;
     })
     .catch((error) => {
-        console.error("\nBASE PREPARATION FAILED");
+        console.error(
+            "\nCLEAN BASE VALIDATION FAILED"
+        );
         console.error(error);
         process.exitCode = 1;
     });
