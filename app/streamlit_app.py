@@ -37,14 +37,11 @@ from app.components.payment_schedule import (
 )
 from app.config import (
     ADMIN_ADDRESS,
-    BOND_TOKEN_ADDRESS,
-    BOND_USD_ADDRESS,
     CHAIN_ID,
     ETHERSCAN_BASE_URL,
     ISSUER_ADDRESS,
     NETWORK_NAME,
     SEPOLIA_CHAIN_ID_HEX,
-    TOKENIZED_BOND_ADDRESS,
     etherscan_address_url,
 )
 from app.investor import (
@@ -58,6 +55,11 @@ from app.overview import (
 )
 from app.payment_schedule import (
     build_payment_schedule,
+)
+from app.transactions import (
+    TransactionPreparationError,
+    build_request_whitelist_transaction,
+    wait_for_whitelist_request_receipt,
 )
 from app.wallet_component import (
     WalletState,
@@ -115,6 +117,31 @@ WHITELIST_STATUS_NAMES = {
     4: "Revoked",
 }
 
+
+# ============================================================
+# Session state
+# ============================================================
+
+if (
+    "wallet_transaction_request"
+    not in st.session_state
+):
+    st.session_state[
+        "wallet_transaction_request"
+    ] = None
+
+if (
+    "last_wallet_transaction"
+    not in st.session_state
+):
+    st.session_state[
+        "last_wallet_transaction"
+    ] = None
+
+
+# ============================================================
+# Cached blockchain readers
+# ============================================================
 
 @st.cache_resource
 def get_blockchain_client() -> BlockchainClient:
@@ -176,8 +203,10 @@ def load_whitelist_info(
 ) -> dict[str, Any]:
     client = get_blockchain_client()
 
-    checksum_address = Web3.to_checksum_address(
-        address
+    checksum_address = (
+        Web3.to_checksum_address(
+            address
+        )
     )
 
     result = (
@@ -217,7 +246,8 @@ def load_whitelist_info(
     ttl=20,
     show_spinner=False,
 )
-def load_whitelist_applicants() -> list[dict[str, Any]]:
+def load_whitelist_applicants(
+) -> list[dict[str, Any]]:
     client = get_blockchain_client()
     contract = client.tokenized_bond
 
@@ -229,11 +259,17 @@ def load_whitelist_applicants() -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
 
-    for index in range(applicant_count):
-        address = Web3.to_checksum_address(
-            contract.functions
-            .getWhitelistApplicantAt(index)
-            .call()
+    for index in range(
+        applicant_count
+    ):
+        address = (
+            Web3.to_checksum_address(
+                contract.functions
+                .getWhitelistApplicantAt(
+                    index
+                )
+                .call()
+            )
         )
 
         info = load_whitelist_info(
@@ -244,20 +280,30 @@ def load_whitelist_applicants() -> list[dict[str, Any]]:
             {
                 "No.": index + 1,
                 "Address": address,
-                "Status": info["status_name"],
+                "Status": (
+                    info["status_name"]
+                ),
                 "Whitelisted": (
                     "Yes"
-                    if info["is_whitelisted"]
+                    if info[
+                        "is_whitelisted"
+                    ]
                     else "No"
                 ),
                 "Requested At": (
                     info["requested_at"]
-                    if info["requested_at"] > 0
+                    if (
+                        info["requested_at"]
+                        > 0
+                    )
                     else None
                 ),
                 "Reviewed At": (
                     info["reviewed_at"]
-                    if info["reviewed_at"] > 0
+                    if (
+                        info["reviewed_at"]
+                        > 0
+                    )
                     else None
                 ),
                 "Etherscan": (
@@ -280,6 +326,10 @@ def clear_dynamic_cache() -> None:
     load_whitelist_applicants.clear()
 
 
+# ============================================================
+# General helpers
+# ============================================================
+
 def shorten_address(
     address: str,
 ) -> str:
@@ -296,8 +346,10 @@ def shorten_address(
 def determine_role(
     account: str,
 ) -> str:
-    checksum_account = Web3.to_checksum_address(
-        account
+    checksum_account = (
+        Web3.to_checksum_address(
+            account
+        )
     )
 
     if (
@@ -377,6 +429,207 @@ def render_wallet_identity(
         )
 
 
+def render_transaction_feedback() -> None:
+    """Render the most recent browser-wallet transaction."""
+    result = st.session_state.get(
+        "last_wallet_transaction"
+    )
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        return
+
+    status = str(
+        result.get(
+            "status",
+            "",
+        )
+    )
+
+    message = str(
+        result.get(
+            "message",
+            "",
+        )
+    )
+
+    if status == "confirmed":
+        st.success(message)
+
+    elif status == "submitted":
+        st.warning(message)
+
+    elif status == "rejected":
+        st.warning(message)
+
+    elif status == "failed":
+        st.error(message)
+
+    transaction_hash = str(
+        result.get(
+            "transactionHash",
+            "",
+        )
+        or ""
+    )
+
+    etherscan_url = str(
+        result.get(
+            "etherscanUrl",
+            "",
+        )
+        or ""
+    )
+
+    if transaction_hash:
+        st.code(
+            transaction_hash,
+            language=None,
+        )
+
+    if etherscan_url:
+        st.link_button(
+            "Open transaction on Etherscan",
+            etherscan_url,
+        )
+
+
+def queue_request_whitelist(
+    investor_address: str,
+) -> None:
+    """Prepare one requestWhitelist payload for MetaMask."""
+    try:
+        request = (
+            build_request_whitelist_transaction(
+                get_blockchain_client(),
+                investor_address,
+            )
+        )
+
+        st.session_state[
+            "wallet_transaction_request"
+        ] = request
+
+        st.session_state[
+            "last_wallet_transaction"
+        ] = None
+
+        st.rerun()
+
+    except TransactionPreparationError as exc:
+        st.error(
+            str(exc)
+        )
+
+
+def process_wallet_transaction(
+    wallet: WalletState,
+    connected_account: str,
+) -> None:
+    """
+    Process a MetaMask result only when it matches the pending request.
+    """
+    pending_request = (
+        st.session_state.get(
+            "wallet_transaction_request"
+        )
+    )
+
+    if not isinstance(
+        pending_request,
+        dict,
+    ):
+        return
+
+    expected_request_id = str(
+        pending_request.get(
+            "requestId",
+            "",
+        )
+    )
+
+    if (
+        not expected_request_id
+        or wallet.transaction_request_id
+        != expected_request_id
+    ):
+        return
+
+    if (
+        wallet.transaction_status
+        in {
+            "rejected",
+            "failed",
+        }
+    ):
+        status = (
+            wallet.transaction_status
+        )
+
+        error = (
+            wallet.transaction_error
+            or (
+                "Người dùng đã từ chối giao dịch."
+                if status == "rejected"
+                else "MetaMask không thể gửi giao dịch."
+            )
+        )
+
+        st.session_state[
+            "last_wallet_transaction"
+        ] = {
+            "action":
+                wallet.transaction_action,
+            "status": status,
+            "message": error,
+        }
+
+        st.session_state[
+            "wallet_transaction_request"
+        ] = None
+
+        st.rerun()
+
+    if (
+        wallet.transaction_status
+        != "submitted"
+    ):
+        return
+
+    transaction_hash = (
+        wallet.transaction_hash
+    )
+
+    with st.spinner(
+        "MetaMask đã gửi giao dịch. "
+        "Đang chờ Sepolia xác nhận..."
+    ):
+        result = (
+            wait_for_whitelist_request_receipt(
+                get_blockchain_client(),
+                transaction_hash,
+                connected_account,
+            )
+        )
+
+    st.session_state[
+        "last_wallet_transaction"
+    ] = result
+
+    st.session_state[
+        "wallet_transaction_request"
+    ] = None
+
+    clear_dynamic_cache()
+    st.rerun()
+
+
+# ============================================================
+# Role pages
+# ============================================================
+
 def render_admin_home() -> None:
     render_heading(
         "Admin Portal",
@@ -387,12 +640,17 @@ def render_admin_home() -> None:
     )
 
     state = load_system_state()
-    applicants = load_whitelist_applicants()
+    applicants = (
+        load_whitelist_applicants()
+    )
 
     pending_count = sum(
         1
         for row in applicants
-        if row["Status"] == "Pending approval"
+        if (
+            row["Status"]
+            == "Pending approval"
+        )
     )
 
     approved_count = sum(
@@ -491,9 +749,8 @@ def render_admin_home() -> None:
     )
 
     st.caption(
-        "Các nút đang ở chế độ preview. "
-        "Bước kế tiếp sẽ tạo transaction payload "
-        "và yêu cầu ví Admin ký bằng MetaMask."
+        "Checkpoint này chỉ mở requestWhitelist() "
+        "cho Investor. Admin transactions vẫn khóa."
     )
 
 
@@ -536,29 +793,37 @@ def render_investor_home(
     )
 
     status_value = int(
-        whitelist_info["status_value"]
+        whitelist_info[
+            "status_value"
+        ]
     )
 
     status_name = str(
-        whitelist_info["status_name"]
+        whitelist_info[
+            "status_name"
+        ]
     )
 
     if status_value == 0:
         st.info(
             "Ví chưa đăng ký whitelist."
         )
+
     elif status_value == 1:
         st.warning(
             "Yêu cầu whitelist đang chờ Admin phê duyệt."
         )
+
     elif status_value == 2:
         st.success(
             "Ví đã được Admin phê duyệt whitelist."
         )
+
     elif status_value == 3:
         st.error(
             "Yêu cầu whitelist đã bị từ chối."
         )
+
     elif status_value == 4:
         st.warning(
             "Quyền whitelist của ví đã bị thu hồi."
@@ -593,20 +858,50 @@ def render_investor_home(
         }
     )
 
-    st.button(
+    pending_transaction = (
+        st.session_state.get(
+            "wallet_transaction_request"
+        )
+    )
+
+    transaction_waiting = (
+        isinstance(
+            pending_transaction,
+            dict,
+        )
+    )
+
+    request_clicked = st.button(
         "Request Whitelist",
-        disabled=True,
+        disabled=(
+            not request_allowed
+            or transaction_waiting
+        ),
         use_container_width=True,
+        type="primary",
         help=(
-            "Transaction signing will be activated "
-            "in the next step."
+            "MetaMask sẽ yêu cầu ví Investor ký "
+            "requestWhitelist()."
             if request_allowed
             else (
-                "The current whitelist status "
-                "does not allow a new request."
+                "Trạng thái whitelist hiện tại "
+                "không cho phép đăng ký lại."
             )
         ),
     )
+
+    if request_clicked:
+        queue_request_whitelist(
+            account
+        )
+
+    if transaction_waiting:
+        st.info(
+            "Giao dịch đã được chuẩn bị. "
+            "Kiểm tra cửa sổ MetaMask để xác nhận."
+        )
+
+    render_transaction_feedback()
 
     with st.spinner(
         "Loading connected investor position..."
@@ -619,7 +914,8 @@ def render_investor_home(
 
     render_investor_portal(
         {
-            "Connected Wallet": position,
+            "Connected Wallet":
+                position,
         }
     )
 
@@ -636,7 +932,9 @@ def render_bond_page() -> None:
     with st.spinner(
         "Loading bond overview..."
     ):
-        overview = load_bond_overview()
+        overview = (
+            load_bond_overview()
+        )
 
     render_bond_overview(
         overview
@@ -653,13 +951,16 @@ def render_payment_page() -> None:
     )
 
     overview = load_bond_overview()
+
     issuer_dashboard = (
         load_issuer_dashboard()
     )
 
-    schedule = build_payment_schedule(
-        overview,
-        issuer_dashboard,
+    schedule = (
+        build_payment_schedule(
+            overview,
+            issuer_dashboard,
+        )
     )
 
     render_payment_schedule(
@@ -677,8 +978,11 @@ def render_technical_page() -> None:
     )
 
     client = get_blockchain_client()
-    network = client.get_network_status()
+    network = (
+        client.get_network_status()
+    )
     state = load_system_state()
+
     contract_statuses = (
         client
         .get_all_contract_code_statuses()
@@ -714,14 +1018,17 @@ def render_technical_page() -> None:
 
     rows = [
         {
-            "Contract": item.contract_name,
-            "Address": item.address,
+            "Contract":
+                item.contract_name,
+            "Address":
+                item.address,
             "Bytecode": (
                 "Available"
                 if item.has_code
                 else "Missing"
             ),
-            "Size": item.bytecode_size,
+            "Size":
+                item.bytecode_size,
             "Etherscan": (
                 etherscan_address_url(
                     item.address
@@ -747,35 +1054,33 @@ def render_technical_page() -> None:
 
     st.json(
         {
-            "Admin": state.admin,
-            "Issuer": state.issuer,
-            "Payment Token": (
-                state.payment_token
-            ),
-            "Bond Token": state.bond_token,
-            "Controller": (
-                state.bond_token_controller
-            ),
-            "BondToken Owner": (
-                state.bond_token_owner
-            ),
-            "BondToken Supply": (
-                state.bond_token_supply
-            ),
-            "Total Subscribed": (
-                state.total_subscribed
-            ),
-            "Total Raised": (
+            "Admin":
+                state.admin,
+            "Issuer":
+                state.issuer,
+            "Payment Token":
+                state.payment_token,
+            "Bond Token":
+                state.bond_token,
+            "Controller":
+                state.bond_token_controller,
+            "BondToken Owner":
+                state.bond_token_owner,
+            "BondToken Supply":
+                state.bond_token_supply,
+            "Total Subscribed":
+                state.total_subscribed,
+            "Total Raised":
                 str(
-                    state.total_raised_display
-                )
-            ),
+                    state
+                    .total_raised_display
+                ),
         }
     )
 
 
 # ============================================================
-# Landing page: wallet first
+# Wallet-first landing page
 # ============================================================
 
 render_heading(
@@ -795,6 +1100,11 @@ wallet = render_wallet_connector(
     required_chain_id=(
         SEPOLIA_CHAIN_ID_HEX
     ),
+    transaction_request=(
+        st.session_state.get(
+            "wallet_transaction_request"
+        )
+    ),
 )
 
 if wallet.error:
@@ -811,9 +1121,7 @@ if not wallet.installed:
 
 if not wallet.connected:
     st.info(
-        "Bước đầu tiên chỉ là kết nối ví. "
-        "Ứng dụng chưa hiển thị portal trước khi "
-        "MetaMask cấp quyền truy cập địa chỉ ví."
+        "Kết nối MetaMask để tiếp tục."
     )
     st.stop()
 
@@ -837,7 +1145,7 @@ if (
 
 
 # ============================================================
-# Role-based routing
+# Role identification and transaction result
 # ============================================================
 
 connected_account = (
@@ -850,10 +1158,66 @@ role = determine_role(
     connected_account
 )
 
+# A pending requestWhitelist must still be signed by the same
+# connected Investor account that created the payload.
+pending_request = (
+    st.session_state.get(
+        "wallet_transaction_request"
+    )
+)
+
+if isinstance(
+    pending_request,
+    dict,
+):
+    expected_sender = str(
+        pending_request.get(
+            "from",
+            "",
+        )
+    )
+
+    if (
+        not Web3.is_address(
+            expected_sender
+        )
+        or (
+            Web3.to_checksum_address(
+                expected_sender
+            )
+            != connected_account
+        )
+    ):
+        st.session_state[
+            "wallet_transaction_request"
+        ] = None
+
+        st.session_state[
+            "last_wallet_transaction"
+        ] = {
+            "status": "failed",
+            "message": (
+                "MetaMask account changed before signing. "
+                "The prepared transaction was cancelled."
+            ),
+        }
+
+        st.rerun()
+
+process_wallet_transaction(
+    wallet,
+    connected_account,
+)
+
 render_wallet_identity(
     wallet,
     role,
 )
+
+
+# ============================================================
+# Role-specific navigation
+# ============================================================
 
 with st.sidebar:
     st.header(
@@ -885,6 +1249,7 @@ with st.sidebar:
             "Bond Overview",
             "Technical Status",
         ]
+
     elif role == "ISSUER":
         page_options = [
             "Issuer Portal",
@@ -892,6 +1257,7 @@ with st.sidebar:
             "Payment Schedule",
             "Technical Status",
         ]
+
     else:
         page_options = [
             "Investor Portal",
@@ -922,6 +1288,11 @@ with st.sidebar:
     ):
         clear_dynamic_cache()
         st.rerun()
+
+
+# ============================================================
+# Page routing
+# ============================================================
 
 started_at = time.perf_counter()
 
@@ -954,7 +1325,8 @@ try:
     st.markdown(
         (
             '<div class="load-time">'
-            f"Page load time: {elapsed:.3f} seconds"
+            f"Page load time: "
+            f"{elapsed:.3f} seconds"
             "</div>"
         ),
         unsafe_allow_html=True,
@@ -963,13 +1335,14 @@ try:
     st.divider()
 
     st.caption(
-        "MetaMask provides the connected account and network. "
-        "Transaction signing remains disabled in this checkpoint."
+        "MetaMask signs transactions in the browser. "
+        "The Streamlit server only prepares calldata "
+        "and verifies public receipts."
     )
 
 except BlockchainError as exc:
     st.error(
-        "Không thể đọc dữ liệu blockchain."
+        "Không thể xử lý dữ liệu blockchain."
     )
 
     st.code(

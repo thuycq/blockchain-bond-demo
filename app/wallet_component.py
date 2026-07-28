@@ -8,7 +8,7 @@ import streamlit as st
 
 @dataclass(frozen=True)
 class WalletState:
-    """Current browser-wallet state returned by MetaMask."""
+    """Browser-wallet and transaction state returned by MetaMask."""
 
     installed: bool
     connected: bool
@@ -16,10 +16,17 @@ class WalletState:
     chain_id: str
     error: str
 
+    transaction_request_id: str
+    transaction_action: str
+    transaction_status: str
+    transaction_hash: str
+    transaction_error: str
+
 
 WALLET_HTML = """
 <div class="wallet-card">
     <div class="wallet-heading">MetaMask Wallet</div>
+
     <div id="wallet-status" class="wallet-status">
         Checking MetaMask...
     </div>
@@ -35,6 +42,16 @@ WALLET_HTML = """
     </div>
 
     <div id="wallet-error" class="wallet-error"></div>
+
+    <div id="transaction-panel" class="transaction-panel">
+        <div class="transaction-heading">
+            Wallet Transaction
+        </div>
+
+        <div id="transaction-status" class="transaction-status">
+            No transaction is waiting for MetaMask.
+        </div>
+    </div>
 </div>
 """
 
@@ -48,10 +65,14 @@ WALLET_CSS = """
     font-family: var(--st-font);
 }
 
-.wallet-heading {
-    font-size: 1.15rem;
+.wallet-heading,
+.transaction-heading {
+    font-size: 1.05rem;
     font-weight: 700;
     color: var(--st-text-color);
+}
+
+.wallet-heading {
     margin-bottom: 0.5rem;
 }
 
@@ -97,6 +118,18 @@ button:disabled {
     margin-top: 0.75rem;
     min-height: 1.25rem;
 }
+
+.transaction-panel {
+    border-top: 1px solid var(--st-border-color);
+    margin-top: 1rem;
+    padding-top: 1rem;
+}
+
+.transaction-status {
+    color: var(--st-text-color);
+    margin-top: 0.45rem;
+    word-break: break-word;
+}
 """
 
 
@@ -114,14 +147,25 @@ export default function(component) {
     const switchButton =
         parentElement.querySelector("#switch-network");
 
-    const statusElement =
+    const walletStatusElement =
         parentElement.querySelector("#wallet-status");
 
-    const errorElement =
+    const walletErrorElement =
         parentElement.querySelector("#wallet-error");
 
+    const transactionStatusElement =
+        parentElement.querySelector("#transaction-status");
+
     const requiredChainId =
-        String(data.requiredChainId || "").toLowerCase();
+        String(
+            data.requiredChainId || ""
+        ).toLowerCase();
+
+    const transactionRequest =
+        data.transactionRequest || null;
+
+    const previousTransaction =
+        data.previousTransaction || {};
 
     let currentWallet = {
         installed: false,
@@ -130,6 +174,37 @@ export default function(component) {
         chainId: "",
         error: ""
     };
+
+    let currentTransaction = {
+        requestId:
+            String(
+                previousTransaction.requestId || ""
+            ),
+        action:
+            String(
+                previousTransaction.action || ""
+            ),
+        status:
+            String(
+                previousTransaction.status || ""
+            ),
+        hash:
+            String(
+                previousTransaction.hash || ""
+            ),
+        error:
+            String(
+                previousTransaction.error || ""
+            )
+    };
+
+    if (!window.__bondWalletRequestRegistry) {
+        window.__bondWalletRequestRegistry =
+            new Set();
+    }
+
+    const requestRegistry =
+        window.__bondWalletRequestRegistry;
 
     function emitWallet(nextWallet) {
         currentWallet = {
@@ -142,10 +217,24 @@ export default function(component) {
             currentWallet
         );
 
-        render();
+        renderWallet();
     }
 
-    function render() {
+    function emitTransaction(nextTransaction) {
+        currentTransaction = {
+            ...currentTransaction,
+            ...nextTransaction
+        };
+
+        setStateValue(
+            "transaction",
+            currentTransaction
+        );
+
+        renderTransaction();
+    }
+
+    function renderWallet() {
         const {
             installed,
             connected,
@@ -154,10 +243,11 @@ export default function(component) {
             error
         } = currentWallet;
 
-        errorElement.textContent = error || "";
+        walletErrorElement.textContent =
+            error || "";
 
         if (!installed) {
-            statusElement.textContent =
+            walletStatusElement.textContent =
                 "MetaMask extension was not detected.";
 
             connectButton.disabled = true;
@@ -175,7 +265,7 @@ export default function(component) {
             !connected || correctNetwork;
 
         if (!connected) {
-            statusElement.textContent =
+            walletStatusElement.textContent =
                 "MetaMask is available. Connect the wallet to continue.";
 
             connectButton.textContent =
@@ -187,23 +277,62 @@ export default function(component) {
         connectButton.textContent =
             "Wallet Connected";
 
-        statusElement.textContent =
+        walletStatusElement.textContent =
             `${account} | Chain ID: ${chainId}`;
+    }
+
+    function renderTransaction() {
+        const {
+            status,
+            hash,
+            error
+        } = currentTransaction;
+
+        if (status === "submitted") {
+            transactionStatusElement.textContent =
+                `Transaction submitted: ${hash}`;
+            return;
+        }
+
+        if (status === "rejected") {
+            transactionStatusElement.textContent =
+                `Transaction rejected: ${error}`;
+            return;
+        }
+
+        if (status === "failed") {
+            transactionStatusElement.textContent =
+                `Transaction failed: ${error}`;
+            return;
+        }
+
+        if (
+            transactionRequest
+            && transactionRequest.requestId
+        ) {
+            transactionStatusElement.textContent =
+                "A transaction is ready. Confirm it in MetaMask.";
+            return;
+        }
+
+        transactionStatusElement.textContent =
+            "No transaction is waiting for MetaMask.";
     }
 
     async function readWalletState(
         requestAccounts
     ) {
         if (!window.ethereum) {
-            emitWallet({
+            currentWallet = {
                 installed: false,
                 connected: false,
                 account: "",
                 chainId: "",
                 error:
                     "Install the MetaMask browser extension before continuing."
-            });
+            };
 
+            renderWallet();
             return;
         }
 
@@ -223,7 +352,7 @@ export default function(component) {
                     method: "eth_chainId"
                 });
 
-            emitWallet({
+            currentWallet = {
                 installed: true,
                 connected:
                     Array.isArray(accounts)
@@ -235,7 +364,35 @@ export default function(component) {
                         : "",
                 chainId: chainId || "",
                 error: ""
-            });
+            };
+
+            renderWallet();
+
+            // Only emit when the browser state differs from
+            // the previous Python-side state.
+            const previousWallet =
+                data.previousWallet || {};
+
+            const walletChanged =
+                Boolean(previousWallet.installed)
+                    !== currentWallet.installed
+                || Boolean(previousWallet.connected)
+                    !== currentWallet.connected
+                || String(previousWallet.account || "")
+                    .toLowerCase()
+                    !== currentWallet.account.toLowerCase()
+                || String(previousWallet.chainId || "")
+                    .toLowerCase()
+                    !== currentWallet.chainId.toLowerCase()
+                || String(previousWallet.error || "")
+                    !== currentWallet.error;
+
+            if (walletChanged) {
+                setStateValue(
+                    "wallet",
+                    currentWallet
+                );
+            }
         } catch (error) {
             emitWallet({
                 installed: true,
@@ -270,6 +427,171 @@ export default function(component) {
                 error:
                     error?.message
                     || "Unable to switch MetaMask to Sepolia."
+            });
+        }
+    }
+
+    function validateTransactionRequest() {
+        if (
+            !transactionRequest
+            || !transactionRequest.requestId
+        ) {
+            return null;
+        }
+
+        if (!currentWallet.installed) {
+            throw new Error(
+                "MetaMask is not installed."
+            );
+        }
+
+        if (!currentWallet.connected) {
+            throw new Error(
+                "Connect MetaMask before sending the transaction."
+            );
+        }
+
+        if (
+            String(currentWallet.chainId).toLowerCase()
+            !== requiredChainId
+        ) {
+            throw new Error(
+                "MetaMask must be connected to Ethereum Sepolia."
+            );
+        }
+
+        const connectedAccount =
+            String(
+                currentWallet.account || ""
+            ).toLowerCase();
+
+        const requestedFrom =
+            String(
+                transactionRequest.from || ""
+            ).toLowerCase();
+
+        if (
+            !connectedAccount
+            || connectedAccount !== requestedFrom
+        ) {
+            throw new Error(
+                "The transaction sender does not match the connected MetaMask account."
+            );
+        }
+
+        if (
+            !transactionRequest.to
+            || !transactionRequest.data
+        ) {
+            throw new Error(
+                "The transaction payload is incomplete."
+            );
+        }
+
+        return {
+            from: transactionRequest.from,
+            to: transactionRequest.to,
+            data: transactionRequest.data,
+            value:
+                transactionRequest.value
+                || "0x0",
+            gas: transactionRequest.gas
+        };
+    }
+
+    async function maybeSendTransaction() {
+        if (
+            !transactionRequest
+            || !transactionRequest.requestId
+        ) {
+            return;
+        }
+
+        const requestId =
+            String(
+                transactionRequest.requestId
+            );
+
+        if (
+            currentTransaction.requestId === requestId
+            && [
+                "submitted",
+                "rejected",
+                "failed"
+            ].includes(
+                currentTransaction.status
+            )
+        ) {
+            return;
+        }
+
+        if (
+            requestRegistry.has(
+                requestId
+            )
+        ) {
+            return;
+        }
+
+        requestRegistry.add(
+            requestId
+        );
+
+        try {
+            const transaction =
+                validateTransactionRequest();
+
+            if (!transaction) {
+                return;
+            }
+
+            transactionStatusElement.textContent =
+                "Waiting for confirmation in MetaMask...";
+
+            const transactionHash =
+                await window.ethereum.request({
+                    method: "eth_sendTransaction",
+                    params: [transaction]
+                });
+
+            emitTransaction({
+                requestId: requestId,
+                action:
+                    String(
+                        transactionRequest.action
+                        || ""
+                    ),
+                status: "submitted",
+                hash:
+                    String(
+                        transactionHash
+                        || ""
+                    ),
+                error: ""
+            });
+        } catch (error) {
+            const rejected =
+                Number(error?.code) === 4001;
+
+            emitTransaction({
+                requestId: requestId,
+                action:
+                    String(
+                        transactionRequest.action
+                        || ""
+                    ),
+                status:
+                    rejected
+                        ? "rejected"
+                        : "failed",
+                hash: "",
+                error:
+                    error?.message
+                    || (
+                        rejected
+                            ? "The user rejected the transaction."
+                            : "MetaMask transaction failed."
+                    )
             });
         }
     }
@@ -316,7 +638,13 @@ export default function(component) {
         );
     }
 
-    readWalletState(false);
+    async function initialise() {
+        renderTransaction();
+        await readWalletState(false);
+        await maybeSendTransaction();
+    }
+
+    initialise();
 
     return () => {
         connectButton.onclick = null;
@@ -349,15 +677,83 @@ wallet_component = st.components.v2.component(
 )
 
 
+def _component_value(
+    result: Any,
+    name: str,
+) -> dict[str, Any]:
+    raw_value = getattr(
+        result,
+        name,
+        None,
+    )
+
+    if isinstance(raw_value, dict):
+        return raw_value
+
+    return {}
+
+
+def _previous_component_value(
+    key: str,
+    name: str,
+) -> dict[str, Any]:
+    previous_result = (
+        st.session_state.get(key)
+    )
+
+    if previous_result is None:
+        return {}
+
+    raw_value = getattr(
+        previous_result,
+        name,
+        None,
+    )
+
+    if isinstance(raw_value, dict):
+        return raw_value
+
+    return {}
+
+
 def render_wallet_connector(
     *,
     required_chain_id: str,
+    transaction_request: (
+        dict[str, Any] | None
+    ) = None,
     key: str = "bond_wallet_connector",
 ) -> WalletState:
-    """Mount the MetaMask component and normalize its result."""
+    """
+    Mount MetaMask and optionally ask it to send one transaction.
+
+    Python provides the transaction payload. MetaMask keeps the
+    private key and performs all signing in the browser.
+    """
+    previous_wallet = (
+        _previous_component_value(
+            key,
+            "wallet",
+        )
+    )
+
+    previous_transaction = (
+        _previous_component_value(
+            key,
+            "transaction",
+        )
+    )
+
     result = wallet_component(
         data={
-            "requiredChainId": required_chain_id,
+            "requiredChainId":
+                required_chain_id,
+            "transactionRequest":
+                transaction_request,
+            "previousWallet":
+                previous_wallet,
+            "previousTransaction":
+                previous_transaction,
         },
         default={
             "wallet": {
@@ -366,51 +762,95 @@ def render_wallet_connector(
                 "account": "",
                 "chainId": "",
                 "error": "",
-            }
+            },
+            "transaction": {
+                "requestId": "",
+                "action": "",
+                "status": "",
+                "hash": "",
+                "error": "",
+            },
         },
         key=key,
         on_wallet_change=lambda: None,
+        on_transaction_change=lambda: None,
         width="stretch",
     )
 
-    raw_wallet: Any = getattr(
+    wallet = _component_value(
         result,
         "wallet",
-        None,
     )
 
-    if not isinstance(raw_wallet, dict):
-        raw_wallet = {}
+    transaction = _component_value(
+        result,
+        "transaction",
+    )
 
     return WalletState(
         installed=bool(
-            raw_wallet.get(
+            wallet.get(
                 "installed",
                 False,
             )
         ),
         connected=bool(
-            raw_wallet.get(
+            wallet.get(
                 "connected",
                 False,
             )
         ),
         account=str(
-            raw_wallet.get(
+            wallet.get(
                 "account",
                 "",
             )
             or ""
         ),
         chain_id=str(
-            raw_wallet.get(
+            wallet.get(
                 "chainId",
                 "",
             )
             or ""
         ),
         error=str(
-            raw_wallet.get(
+            wallet.get(
+                "error",
+                "",
+            )
+            or ""
+        ),
+        transaction_request_id=str(
+            transaction.get(
+                "requestId",
+                "",
+            )
+            or ""
+        ),
+        transaction_action=str(
+            transaction.get(
+                "action",
+                "",
+            )
+            or ""
+        ),
+        transaction_status=str(
+            transaction.get(
+                "status",
+                "",
+            )
+            or ""
+        ),
+        transaction_hash=str(
+            transaction.get(
+                "hash",
+                "",
+            )
+            or ""
+        ),
+        transaction_error=str(
+            transaction.get(
                 "error",
                 "",
             )
