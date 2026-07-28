@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "scenario": "success",
+  "createdAt": "2026-07-27T13:17:08.676Z",
+  "network": {
+    "hardhatNetworkName": "localhost",
+    "chainId": "31337"
+  },
+  "contracts": {
+    "paymentToken": "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+    "bondToken": "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
+    "tokenizedBond": "0x610178dA211FEF7D417bC0e6FeD39F05609AD788"
+  },
+  "roles": {
+    "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "admin": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "issuer": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+    "investor1": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+    "investor2": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+    "outsider": "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc"
+  },
+  "state": {
+    "lifecycle": "5",
+    "totalSubscribed": "70",
+    "totalRaised": "7000000000000000000000",
+    "totalRefunded": "0",
+    "proceedsWithdrawn": true,
+    "bondTokenTotalSupply": "0",
+    "contractBondUSDBalance": "0",
+    "coupon1": {
+      "required": "350000000000000000000",
+      "funded": "350000000000000000000",
+      "claimed": "350000000000000000000",
+      "defaulted": false
+    },
+    "coupon2": {
+      "required": "350000000000000000000",
+      "funded": "350000000000000000000",
+      "claimed": "350000000000000000000",
+      "defaulted": false
+    },
+    "principal": {
+      "required": "7000000000000000000000",
+      "funded": "7000000000000000000000",
+      "redeemed": "7000000000000000000000",
+      "defaulted": false
+    }
+  }
+}

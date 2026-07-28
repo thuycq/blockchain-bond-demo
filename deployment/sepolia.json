@@ -1,0 +1,71 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "deployedAt": "2026-07-27T13:54:37.806Z",
+  "roles": {
+    "deployer": "0x09428D10764503E9158374e556398b409d37381E",
+    "admin": "0x09428D10764503E9158374e556398b409d37381E",
+    "issuer": "0x9D4C235100Ddfd5d61326769e16b2BB9dE04074e",
+    "investor1": "0x054d225D719B6326b45c50f3dd3c5275234d96C3",
+    "investor2": "0x6426d2Bd9b9c21218f805C5C54A7c7FAB3a6DEc2",
+    "bondUsdOwner": "0x09428D10764503E9158374e556398b409d37381E"
+  },
+  "contracts": {
+    "BondUSDToken": {
+      "address": "0xcDe41c009D3fFd58CaA9a4CC561155c2616B7D7D",
+      "name": "Bond USD",
+      "symbol": "BONDUSD",
+      "decimals": 18
+    },
+    "BondToken": {
+      "address": "0x47F8629e610489903bbc752f34421CFb068647cc",
+      "deploymentTransactionHash": "0x2bf4ee548a345db483dc6fb1e4c092701ee354f2b640b32f695116ad25c46dec",
+      "deploymentBlock": 11362026,
+      "deploymentGasUsed": "659033"
+    },
+    "TokenizedBond": {
+      "address": "0x4ce75ac4FC853d8b683C649Ec7a10A2eA4ad65E3",
+      "deploymentTransactionHash": "0xfa2d9901e5545ded10e6f1586c652c09dcf34ca23d4d2787f7c036ad6c380f83",
+      "deploymentBlock": 11362027,
+      "deploymentGasUsed": "3806809"
+    }
+  },
+  "configurationTransactions": {
+    "setController": {
+      "transactionHash": "0xacf7c00cdf4325a5e316e11884390bf645569d71b2f8621f9faebed92dd22fa1",
+      "blockNumber": 11362028,
+      "gasUsed": "47424"
+    },
+    "renounceOwnership": {
+      "transactionHash": "0xe9cfc208dd1703a9b33fbe7ef2d87a84756b434e67660bae867f60a4e2122151",
+      "blockNumber": 11362029,
+      "gasUsed": "23294"
+    }
+  },
+  "initialState": {
+    "lifecycle": "0",
+    "lifecycleName": "Draft",
+    "subscriptionPaused": false,
+    "bondTokenOwner": "0x0000000000000000000000000000000000000000",
+    "bondTokenController": "0x4ce75ac4FC853d8b683C649Ec7a10A2eA4ad65E3",
+    "bondTokenTotalSupply": "0"
+  },
+  "basePreparation": {
+    "preparedAt": "2026-07-27T14:25:12.885Z",
+    "investor1Whitelist": {
+      "transactionHash": "0xd7c91fe0d67d0895115149dfd6532847ef652cc0ac6e53901ab1dab6fb442e99",
+      "blockNumber": 11362177,
+      "gasUsed": "47967"
+    },
+    "investor2Whitelist": {
+      "transactionHash": "0xdd626aedab4e5ec475df2c09976740f36cd17bc35851abfc1189761b250799b5",
+      "blockNumber": 11362178,
+      "gasUsed": "47967"
+    },
+    "finalState": {
+      "lifecycle": "0",
+      "lifecycleName": "Draft",
+      "bondTokenTotalSupply": "0"
+    }
+  }
+}

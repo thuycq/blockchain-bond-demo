@@ -1,0 +1,37 @@
+# Node.js dependencies
+node_modules/
+
+# Hardhat
+artifacts/
+cache/
+coverage/
+typechain-types/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+private_key.txt
+*.key
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
