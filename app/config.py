@@ -225,10 +225,60 @@ TOKENIZED_BOND_ABI = extract_abi(
 
 
 # ============================================================
-# Minimal BondUSD ERC-20 ABI
+# BondUSD ERC-20 and owner ABI
 # ============================================================
 
 BOND_USD_ABI: list[dict[str, Any]] = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "owner",
+                "type": "address",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "spender",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "value",
+                "type": "uint256",
+            },
+        ],
+        "name": "Approval",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "from",
+                "type": "address",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "to",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "value",
+                "type": "uint256",
+            },
+        ],
+        "name": "Transfer",
+        "type": "event",
+    },
     {
         "inputs": [],
         "name": "name",
@@ -263,6 +313,19 @@ BOND_USD_ABI: list[dict[str, Any]] = [
                 "internalType": "uint8",
                 "name": "",
                 "type": "uint8",
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "owner",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address",
             }
         ],
         "stateMutability": "view",
@@ -345,6 +408,24 @@ BOND_USD_ABI: list[dict[str, Any]] = [
                 "type": "bool",
             }
         ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "to",
+                "type": "address",
+            },
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256",
+            },
+        ],
+        "name": "mint",
+        "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function",
     },
