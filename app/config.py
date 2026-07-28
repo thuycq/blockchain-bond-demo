@@ -5,12 +5,13 @@ import os
 from pathlib import Path
 from typing import Any
 
+import streamlit as st
 from dotenv import load_dotenv
 from web3 import Web3
 
 
 class ConfigError(RuntimeError):
-    """Raised when the local Streamlit configuration is invalid."""
+    """Raised when the Streamlit configuration is invalid."""
 
 
 # ============================================================
@@ -26,30 +27,17 @@ BOND_TOKEN_ABI_FILE = ABI_DIR / "BondToken.json"
 TOKENIZED_BOND_ABI_FILE = ABI_DIR / "TokenizedBond.json"
 
 ENV_FILE = PROJECT_ROOT / ".env"
-
 load_dotenv(ENV_FILE)
 
 
 # ============================================================
-# Expected Sepolia deployment
+# Network
 # ============================================================
 
 EXPECTED_CHAIN_ID = 11155111
 NETWORK_NAME = "Ethereum Sepolia"
 ETHERSCAN_BASE_URL = "https://sepolia.etherscan.io"
-
-EXPECTED_CONTRACT_ADDRESSES = {
-    "BondUSDToken": "0xcDe41c009D3fFd58CaA9a4CC561155c2616B7D7D",
-    "BondToken": "0x47F8629e610489903bbc752f34421CFb068647cc",
-    "TokenizedBond": "0x4ce75ac4FC853d8b683C649Ec7a10A2eA4ad65E3",
-}
-
-EXPECTED_ROLE_ADDRESSES = {
-    "admin": "0x09428D10764503E9158374e556398b409d37381E",
-    "issuer": "0x9D4C235100Ddfd5d61326769e16b2BB9dE04074e",
-    "investor1": "0x054d225D719B6326b45c50f3dd3c5275234d96C3",
-    "investor2": "0x6426d2Bd9b9c21218f805C5C54A7c7FAB3a6DEc2",
-}
+SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"
 
 
 # ============================================================
@@ -73,16 +61,18 @@ def read_json(path: Path) -> Any:
 
 def extract_abi(path: Path) -> list[dict[str, Any]]:
     """
-    Accept either:
-    1. A plain ABI JSON array.
-    2. A Hardhat artifact object containing the `abi` field.
+    Accept either a plain ABI array or a Hardhat artifact
+    containing an `abi` field.
     """
     data = read_json(path)
 
     if isinstance(data, list):
         return data
 
-    if isinstance(data, dict) and isinstance(data.get("abi"), list):
+    if (
+        isinstance(data, dict)
+        and isinstance(data.get("abi"), list)
+    ):
         return data["abi"]
 
     raise ConfigError(
@@ -90,131 +80,80 @@ def extract_abi(path: Path) -> list[dict[str, Any]]:
     )
 
 
-def normalize_key(value: str) -> str:
-    """Normalize keys so BondUSDToken and bond_usd_token can match."""
-    return "".join(character.lower() for character in value if character.isalnum())
-
-
-def find_contract_entry(
-    deployment: dict[str, Any],
-    contract_name: str,
-) -> Any | None:
-    """
-    Find a contract entry in common deployment JSON structures.
-
-    Supported examples:
-    {
-        "contracts": {
-            "BondToken": "0x..."
-        }
-    }
-
-    {
-        "contracts": {
-            "BondToken": {
-                "address": "0x..."
-            }
-        }
-    }
-    """
-    target = normalize_key(contract_name)
-
-    contracts = deployment.get("contracts", {})
-    if isinstance(contracts, dict):
-        for key, value in contracts.items():
-            if normalize_key(str(key)) == target:
-                return value
-
-    for key, value in deployment.items():
-        if normalize_key(str(key)) == target:
-            return value
-
-    return None
-
-
-def extract_address_from_entry(entry: Any) -> str | None:
-    """Extract an Ethereum address from a string or dictionary entry."""
-    if isinstance(entry, str) and Web3.is_address(entry):
-        return entry
-
-    if isinstance(entry, dict):
-        candidate_keys = (
-            "address",
-            "contractAddress",
-            "contract_address",
+def require_address(
+    value: Any,
+    label: str,
+) -> str:
+    """Validate and checksum one Ethereum address."""
+    if not isinstance(value, str):
+        raise ConfigError(
+            f"{label} không phải chuỗi địa chỉ."
         )
 
-        for key in candidate_keys:
-            value = entry.get(key)
-            if isinstance(value, str) and Web3.is_address(value):
-                return value
+    if not Web3.is_address(value):
+        raise ConfigError(
+            f"{label} không phải địa chỉ Ethereum hợp lệ: "
+            f"{value}"
+        )
 
-    return None
+    return Web3.to_checksum_address(value)
 
 
-def get_contract_address(
+def contract_address(
     deployment: dict[str, Any],
     contract_name: str,
 ) -> str:
-    """
-    Read a contract address from sepolia.json.
+    """Read one contract address from deployment/sepolia.json."""
+    contracts = deployment.get("contracts")
 
-    The known BOND 5 address is used only as a guarded fallback.
-    """
-    entry = find_contract_entry(deployment, contract_name)
-    discovered_address = extract_address_from_entry(entry)
-    expected_address = EXPECTED_CONTRACT_ADDRESSES[contract_name]
-
-    if discovered_address is None:
-        discovered_address = expected_address
-
-    discovered_checksum = Web3.to_checksum_address(discovered_address)
-    expected_checksum = Web3.to_checksum_address(expected_address)
-
-    if discovered_checksum != expected_checksum:
+    if not isinstance(contracts, dict):
         raise ConfigError(
-            f"Địa chỉ {contract_name} trong sepolia.json không khớp "
-            f"base deployment chính thức.\n"
-            f"Trong JSON: {discovered_checksum}\n"
-            f"Mong đợi:   {expected_checksum}"
+            "sepolia.json không có trường contracts hợp lệ."
         )
 
-    return discovered_checksum
+    entry = contracts.get(contract_name)
 
+    if not isinstance(entry, dict):
+        raise ConfigError(
+            f"Không tìm thấy deployment của {contract_name}."
+        )
 
-def get_chain_id(deployment: dict[str, Any]) -> int:
-    """Read chain ID from common deployment JSON structures."""
-    possible_values = (
-        deployment.get("chainId"),
-        deployment.get("chain_id"),
+    return require_address(
+        entry.get("address"),
+        f"{contract_name} address",
     )
 
-    network = deployment.get("network")
-    if isinstance(network, dict):
-        possible_values += (
-            network.get("chainId"),
-            network.get("chain_id"),
+
+def role_address(
+    deployment: dict[str, Any],
+    role_name: str,
+) -> str:
+    """Read one configured role from deployment/sepolia.json."""
+    roles = deployment.get("roles")
+
+    if not isinstance(roles, dict):
+        raise ConfigError(
+            "sepolia.json không có trường roles hợp lệ."
         )
 
-    for value in possible_values:
-        if value is None:
-            continue
-
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            continue
-
-    return EXPECTED_CHAIN_ID
+    return require_address(
+        roles.get(role_name),
+        f"{role_name} address",
+    )
 
 
 # ============================================================
-# Load deployment and ABI
+# Load clean V2 deployment
 # ============================================================
 
 DEPLOYMENT = read_json(DEPLOYMENT_FILE)
 
-CHAIN_ID = get_chain_id(DEPLOYMENT)
+CHAIN_ID = int(
+    DEPLOYMENT.get(
+        "chainId",
+        EXPECTED_CHAIN_ID,
+    )
+)
 
 if CHAIN_ID != EXPECTED_CHAIN_ID:
     raise ConfigError(
@@ -222,71 +161,123 @@ if CHAIN_ID != EXPECTED_CHAIN_ID:
         f"Sepolia phải là {EXPECTED_CHAIN_ID}."
     )
 
-BOND_USD_ADDRESS = get_contract_address(
+DEPLOYMENT_VERSION = str(
+    DEPLOYMENT.get("version", "")
+)
+
+if (
+    DEPLOYMENT_VERSION
+    != "v2-whitelist-self-registration"
+):
+    raise ConfigError(
+        "Ứng dụng yêu cầu clean deployment V2 có "
+        "whitelist self-registration."
+    )
+
+if DEPLOYMENT.get("cleanDeployment") is not True:
+    raise ConfigError(
+        "Deployment hiện tại không được đánh dấu là clean."
+    )
+
+BOND_USD_ADDRESS = contract_address(
     DEPLOYMENT,
     "BondUSDToken",
 )
 
-BOND_TOKEN_ADDRESS = get_contract_address(
+BOND_TOKEN_ADDRESS = contract_address(
     DEPLOYMENT,
     "BondToken",
 )
 
-TOKENIZED_BOND_ADDRESS = get_contract_address(
+TOKENIZED_BOND_ADDRESS = contract_address(
     DEPLOYMENT,
     "TokenizedBond",
 )
 
-ADMIN_ADDRESS = Web3.to_checksum_address(
-    EXPECTED_ROLE_ADDRESSES["admin"]
+ADMIN_ADDRESS = role_address(
+    DEPLOYMENT,
+    "admin",
 )
 
-ISSUER_ADDRESS = Web3.to_checksum_address(
-    EXPECTED_ROLE_ADDRESSES["issuer"]
+ISSUER_ADDRESS = role_address(
+    DEPLOYMENT,
+    "issuer",
 )
 
-INVESTOR_1_ADDRESS = Web3.to_checksum_address(
-    EXPECTED_ROLE_ADDRESSES["investor1"]
+EXPECTED_CONTRACT_ADDRESSES = {
+    "BondUSDToken": BOND_USD_ADDRESS,
+    "BondToken": BOND_TOKEN_ADDRESS,
+    "TokenizedBond": TOKENIZED_BOND_ADDRESS,
+}
+
+EXPECTED_ROLE_ADDRESSES = {
+    "admin": ADMIN_ADDRESS,
+    "issuer": ISSUER_ADDRESS,
+}
+
+BOND_TOKEN_ABI = extract_abi(
+    BOND_TOKEN_ABI_FILE
 )
 
-INVESTOR_2_ADDRESS = Web3.to_checksum_address(
-    EXPECTED_ROLE_ADDRESSES["investor2"]
+TOKENIZED_BOND_ABI = extract_abi(
+    TOKENIZED_BOND_ABI_FILE
 )
-
-BOND_TOKEN_ABI = extract_abi(BOND_TOKEN_ABI_FILE)
-TOKENIZED_BOND_ABI = extract_abi(TOKENIZED_BOND_ABI_FILE)
 
 
 # ============================================================
-# Minimal ERC-20 ABI for read-only BondUSD access
+# Minimal BondUSD ERC-20 ABI
 # ============================================================
 
 BOND_USD_ABI: list[dict[str, Any]] = [
     {
         "inputs": [],
         "name": "name",
-        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "",
+                "type": "string",
+            }
+        ],
         "stateMutability": "view",
         "type": "function",
     },
     {
         "inputs": [],
         "name": "symbol",
-        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "",
+                "type": "string",
+            }
+        ],
         "stateMutability": "view",
         "type": "function",
     },
     {
         "inputs": [],
         "name": "decimals",
-        "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+        "outputs": [
+            {
+                "internalType": "uint8",
+                "name": "",
+                "type": "uint8",
+            }
+        ],
         "stateMutability": "view",
         "type": "function",
     },
     {
         "inputs": [],
         "name": "totalSupply",
-        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256",
+            }
+        ],
         "stateMutability": "view",
         "type": "function",
     },
@@ -333,6 +324,30 @@ BOND_USD_ABI: list[dict[str, Any]] = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "spender",
+                "type": "address",
+            },
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256",
+            },
+        ],
+        "name": "approve",
+        "outputs": [
+            {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+            }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
 ]
 
 
@@ -340,20 +355,70 @@ BOND_USD_ABI: list[dict[str, Any]] = [
 # RPC settings
 # ============================================================
 
-SEPOLIA_RPC_URL = os.getenv("SEPOLIA_RPC_URL", "").strip()
+def load_rpc_url() -> str:
+    """
+    Read Sepolia RPC from local .env or Streamlit Cloud secrets.
+    No private key is loaded by the application.
+    """
+    environment_value = os.getenv(
+        "SEPOLIA_RPC_URL",
+        "",
+    ).strip()
+
+    if environment_value:
+        return environment_value
+
+    try:
+        secret_value = st.secrets.get(
+            "SEPOLIA_RPC_URL",
+            "",
+        )
+
+        if secret_value:
+            return str(secret_value).strip()
+    except (
+        FileNotFoundError,
+        KeyError,
+        RuntimeError,
+    ):
+        pass
+
+    return ""
+
+
+SEPOLIA_RPC_URL = load_rpc_url()
 
 if not SEPOLIA_RPC_URL:
     raise ConfigError(
-        "Không tìm thấy SEPOLIA_RPC_URL trong file .env."
+        "Không tìm thấy SEPOLIA_RPC_URL. "
+        "Local: khai báo trong .env. "
+        "Streamlit Cloud: khai báo trong App Settings > Secrets."
     )
 
 
-def etherscan_address_url(address: str) -> str:
+# ============================================================
+# URL helpers
+# ============================================================
+
+def etherscan_address_url(
+    address: str,
+) -> str:
     """Create a Sepolia Etherscan address URL."""
-    checksum_address = Web3.to_checksum_address(address)
-    return f"{ETHERSCAN_BASE_URL}/address/{checksum_address}"
+    checksum_address = Web3.to_checksum_address(
+        address
+    )
+
+    return (
+        f"{ETHERSCAN_BASE_URL}/address/"
+        f"{checksum_address}"
+    )
 
 
-def etherscan_transaction_url(transaction_hash: str) -> str:
+def etherscan_transaction_url(
+    transaction_hash: str,
+) -> str:
     """Create a Sepolia Etherscan transaction URL."""
-    return f"{ETHERSCAN_BASE_URL}/tx/{transaction_hash}"
+    return (
+        f"{ETHERSCAN_BASE_URL}/tx/"
+        f"{transaction_hash}"
+    )

@@ -5,11 +5,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
-# ============================================================
-# Make project root importable
-# ============================================================
-
 PROJECT_ROOT = Path(
     __file__
 ).resolve().parents[1]
@@ -20,37 +15,16 @@ if str(PROJECT_ROOT) not in sys.path:
         str(PROJECT_ROOT),
     )
 
-
-# ============================================================
-# Third-party imports
-# ============================================================
-
 import pandas as pd
 import streamlit as st
+from web3 import Web3
 
-
-# ============================================================
-# Project imports
-# ============================================================
-
-from app.admin import (
-    get_admin_dashboard,
-)
 from app.blockchain import (
     BlockchainClient,
     BlockchainError,
 )
-from app.compliance import (
-    build_compliance_report,
-)
-from app.components.admin_dashboard import (
-    render_admin_dashboard,
-)
 from app.components.bond_overview import (
     render_bond_overview,
-)
-from app.components.compliance_audit import (
-    render_compliance_audit,
 )
 from app.components.investor_portal import (
     render_investor_portal,
@@ -62,12 +36,14 @@ from app.components.payment_schedule import (
     render_payment_schedule,
 )
 from app.config import (
+    ADMIN_ADDRESS,
     BOND_TOKEN_ADDRESS,
     BOND_USD_ADDRESS,
+    CHAIN_ID,
     ETHERSCAN_BASE_URL,
-    INVESTOR_1_ADDRESS,
-    INVESTOR_2_ADDRESS,
+    ISSUER_ADDRESS,
     NETWORK_NAME,
+    SEPOLIA_CHAIN_ID_HEX,
     TOKENIZED_BOND_ADDRESS,
     etherscan_address_url,
 )
@@ -83,42 +59,47 @@ from app.overview import (
 from app.payment_schedule import (
     build_payment_schedule,
 )
+from app.wallet_component import (
+    WalletState,
+    render_wallet_connector,
+)
 
-
-# ============================================================
-# Streamlit page configuration
-# ============================================================
 
 st.set_page_config(
     page_title="Blockchain Bond Demo",
     page_icon="🏦",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-
-# ============================================================
-# CSS
-# ============================================================
 
 st.markdown(
     """
     <style>
         .main-title {
             font-size: 2.25rem;
-            font-weight: 700;
-            margin-bottom: 0.2rem;
+            font-weight: 750;
+            margin-bottom: 0.15rem;
         }
 
         .sub-title {
             color: #6b7280;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .role-badge {
+            display: inline-block;
+            padding: 0.3rem 0.65rem;
+            border-radius: 999px;
+            border: 1px solid #9ca3af;
+            font-weight: 650;
+            margin-bottom: 0.75rem;
         }
 
         .load-time {
             color: #6b7280;
-            font-size: 0.85rem;
-            margin-bottom: 1rem;
+            font-size: 0.82rem;
+            margin-top: 1rem;
         }
     </style>
     """,
@@ -126,44 +107,23 @@ st.markdown(
 )
 
 
-# ============================================================
-# Blockchain client
-# ============================================================
+WHITELIST_STATUS_NAMES = {
+    0: "Not registered",
+    1: "Pending approval",
+    2: "Approved",
+    3: "Rejected",
+    4: "Revoked",
+}
+
 
 @st.cache_resource
 def get_blockchain_client() -> BlockchainClient:
-    """Create one reusable RPC client."""
+    """Create one reusable read-only Sepolia client."""
     return BlockchainClient()
 
 
-# ============================================================
-# Cached loaders
-# ============================================================
-
 @st.cache_data(
-    ttl=15,
-    show_spinner=False,
-)
-def load_network_status() -> Any:
-    return (
-        get_blockchain_client()
-        .get_network_status()
-    )
-
-
-@st.cache_data(
-    ttl=3600,
-    show_spinner=False,
-)
-def load_contract_statuses() -> Any:
-    return (
-        get_blockchain_client()
-        .get_all_contract_code_statuses()
-    )
-
-
-@st.cache_data(
-    ttl=30,
+    ttl=20,
     show_spinner=False,
 )
 def load_system_state() -> Any:
@@ -174,7 +134,7 @@ def load_system_state() -> Any:
 
 
 @st.cache_data(
-    ttl=30,
+    ttl=20,
     show_spinner=False,
 )
 def load_bond_overview() -> Any:
@@ -184,22 +144,7 @@ def load_bond_overview() -> Any:
 
 
 @st.cache_data(
-    ttl=30,
-    show_spinner=False,
-)
-def load_investor_position(
-    address: str,
-    label: str,
-) -> Any:
-    return get_investor_position(
-        get_blockchain_client(),
-        address,
-        label,
-    )
-
-
-@st.cache_data(
-    ttl=30,
+    ttl=20,
     show_spinner=False,
 )
 def load_issuer_dashboard() -> Any:
@@ -209,35 +154,131 @@ def load_issuer_dashboard() -> Any:
 
 
 @st.cache_data(
-    ttl=30,
+    ttl=20,
     show_spinner=False,
 )
-def load_admin_dashboard() -> Any:
-    return get_admin_dashboard(
-        get_blockchain_client()
+def load_investor_position(
+    address: str,
+) -> Any:
+    return get_investor_position(
+        get_blockchain_client(),
+        address,
+        "Connected Investor",
     )
 
 
+@st.cache_data(
+    ttl=20,
+    show_spinner=False,
+)
+def load_whitelist_info(
+    address: str,
+) -> dict[str, Any]:
+    client = get_blockchain_client()
+
+    checksum_address = Web3.to_checksum_address(
+        address
+    )
+
+    result = (
+        client.tokenized_bond
+        .functions
+        .getWhitelistInfo(
+            checksum_address
+        )
+        .call()
+    )
+
+    values = list(result)
+
+    if len(values) != 4:
+        raise BlockchainError(
+            "getWhitelistInfo() không trả về đúng 4 trường."
+        )
+
+    status_value = int(values[0])
+
+    return {
+        "address": checksum_address,
+        "status_value": status_value,
+        "status_name": (
+            WHITELIST_STATUS_NAMES.get(
+                status_value,
+                f"Unknown ({status_value})",
+            )
+        ),
+        "is_whitelisted": bool(values[1]),
+        "requested_at": int(values[2]),
+        "reviewed_at": int(values[3]),
+    }
+
+
+@st.cache_data(
+    ttl=20,
+    show_spinner=False,
+)
+def load_whitelist_applicants() -> list[dict[str, Any]]:
+    client = get_blockchain_client()
+    contract = client.tokenized_bond
+
+    applicant_count = int(
+        contract.functions
+        .getWhitelistApplicantCount()
+        .call()
+    )
+
+    rows: list[dict[str, Any]] = []
+
+    for index in range(applicant_count):
+        address = Web3.to_checksum_address(
+            contract.functions
+            .getWhitelistApplicantAt(index)
+            .call()
+        )
+
+        info = load_whitelist_info(
+            address
+        )
+
+        rows.append(
+            {
+                "No.": index + 1,
+                "Address": address,
+                "Status": info["status_name"],
+                "Whitelisted": (
+                    "Yes"
+                    if info["is_whitelisted"]
+                    else "No"
+                ),
+                "Requested At": (
+                    info["requested_at"]
+                    if info["requested_at"] > 0
+                    else None
+                ),
+                "Reviewed At": (
+                    info["reviewed_at"]
+                    if info["reviewed_at"] > 0
+                    else None
+                ),
+                "Etherscan": (
+                    etherscan_address_url(
+                        address
+                    )
+                ),
+            }
+        )
+
+    return rows
+
+
 def clear_dynamic_cache() -> None:
-    """Clear data that can change on-chain."""
-    load_network_status.clear()
     load_system_state.clear()
     load_bond_overview.clear()
-    load_investor_position.clear()
     load_issuer_dashboard.clear()
-    load_admin_dashboard.clear()
+    load_investor_position.clear()
+    load_whitelist_info.clear()
+    load_whitelist_applicants.clear()
 
-
-def clear_all_cache() -> None:
-    """Clear static and dynamic cached data."""
-    clear_dynamic_cache()
-    load_contract_statuses.clear()
-    get_blockchain_client.clear()
-
-
-# ============================================================
-# Helpers
-# ============================================================
 
 def shorten_address(
     address: str,
@@ -252,25 +293,33 @@ def shorten_address(
     )
 
 
-def render_load_time(
-    started_at: float,
-) -> None:
-    elapsed = (
-        time.perf_counter()
-        - started_at
+def determine_role(
+    account: str,
+) -> str:
+    checksum_account = Web3.to_checksum_address(
+        account
     )
 
-    st.markdown(
-        (
-            '<div class="load-time">'
-            f"Page load time: {elapsed:.3f} seconds"
-            "</div>"
-        ),
-        unsafe_allow_html=True,
-    )
+    if (
+        checksum_account
+        == Web3.to_checksum_address(
+            ADMIN_ADDRESS
+        )
+    ):
+        return "ADMIN"
+
+    if (
+        checksum_account
+        == Web3.to_checksum_address(
+            ISSUER_ADDRESS
+        )
+    ):
+        return "ISSUER"
+
+    return "INVESTOR"
 
 
-def render_page_heading(
+def render_heading(
     title: str,
     description: str,
 ) -> None:
@@ -293,64 +342,393 @@ def render_page_heading(
     )
 
 
-def render_technical_status() -> None:
-    """Render network, contract and base deployment status."""
-    network = load_network_status()
-    contract_statuses = load_contract_statuses()
-    system_state = load_system_state()
+def render_wallet_identity(
+    wallet: WalletState,
+    role: str,
+) -> None:
+    st.markdown(
+        (
+            '<div class="role-badge">'
+            f"{role}"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
-    st.subheader("Network Status")
+    identity_col_1, identity_col_2 = (
+        st.columns([3, 1])
+    )
 
-    (
-        network_col_1,
-        network_col_2,
-        network_col_3,
-        network_col_4,
-    ) = st.columns(4)
+    with identity_col_1:
+        st.code(
+            Web3.to_checksum_address(
+                wallet.account
+            ),
+            language=None,
+        )
 
-    network_col_1.metric(
-        label="RPC",
-        value=(
+    with identity_col_2:
+        st.link_button(
+            "Open wallet on Etherscan",
+            etherscan_address_url(
+                wallet.account
+            ),
+            use_container_width=True,
+        )
+
+
+def render_admin_home() -> None:
+    render_heading(
+        "Admin Portal",
+        (
+            "Whitelist requests and administrative "
+            "subscription controls"
+        ),
+    )
+
+    state = load_system_state()
+    applicants = load_whitelist_applicants()
+
+    pending_count = sum(
+        1
+        for row in applicants
+        if row["Status"] == "Pending approval"
+    )
+
+    approved_count = sum(
+        1
+        for row in applicants
+        if row["Status"] == "Approved"
+    )
+
+    metric_1, metric_2, metric_3, metric_4 = (
+        st.columns(4)
+    )
+
+    metric_1.metric(
+        "Lifecycle",
+        state.lifecycle_name,
+    )
+
+    metric_2.metric(
+        "All Applicants",
+        len(applicants),
+    )
+
+    metric_3.metric(
+        "Pending",
+        pending_count,
+    )
+
+    metric_4.metric(
+        "Approved",
+        approved_count,
+    )
+
+    st.subheader(
+        "Whitelist Applicants"
+    )
+
+    if not applicants:
+        st.info(
+            "Chưa có investor nào gửi yêu cầu whitelist."
+        )
+    else:
+        st.dataframe(
+            pd.DataFrame(applicants),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Etherscan": (
+                    st.column_config.LinkColumn(
+                        "Etherscan",
+                        display_text="Open",
+                    )
+                ),
+            },
+        )
+
+    st.subheader(
+        "Admin Actions"
+    )
+
+    action_col_1, action_col_2, action_col_3 = (
+        st.columns(3)
+    )
+
+    action_col_1.button(
+        "Approve Pending Request",
+        disabled=True,
+        use_container_width=True,
+    )
+
+    action_col_2.button(
+        "Reject Pending Request",
+        disabled=True,
+        use_container_width=True,
+    )
+
+    action_col_3.button(
+        "Revoke Approved Investor",
+        disabled=True,
+        use_container_width=True,
+    )
+
+    pause_col_1, pause_col_2 = (
+        st.columns(2)
+    )
+
+    pause_col_1.button(
+        "Pause Subscription",
+        disabled=True,
+        use_container_width=True,
+    )
+
+    pause_col_2.button(
+        "Unpause Subscription",
+        disabled=True,
+        use_container_width=True,
+    )
+
+    st.caption(
+        "Các nút đang ở chế độ preview. "
+        "Bước kế tiếp sẽ tạo transaction payload "
+        "và yêu cầu ví Admin ký bằng MetaMask."
+    )
+
+
+def render_issuer_home() -> None:
+    render_heading(
+        "Issuer Portal",
+        (
+            "Offering management, proceeds, coupon "
+            "and principal obligations"
+        ),
+    )
+
+    with st.spinner(
+        "Loading issuer data..."
+    ):
+        dashboard = (
+            load_issuer_dashboard()
+        )
+
+    render_issuer_dashboard(
+        dashboard
+    )
+
+
+def render_investor_home(
+    account: str,
+) -> None:
+    render_heading(
+        "Investor Portal",
+        (
+            "Whitelist registration and the connected "
+            "wallet's bond position"
+        ),
+    )
+
+    whitelist_info = (
+        load_whitelist_info(
+            account
+        )
+    )
+
+    status_value = int(
+        whitelist_info["status_value"]
+    )
+
+    status_name = str(
+        whitelist_info["status_name"]
+    )
+
+    if status_value == 0:
+        st.info(
+            "Ví chưa đăng ký whitelist."
+        )
+    elif status_value == 1:
+        st.warning(
+            "Yêu cầu whitelist đang chờ Admin phê duyệt."
+        )
+    elif status_value == 2:
+        st.success(
+            "Ví đã được Admin phê duyệt whitelist."
+        )
+    elif status_value == 3:
+        st.error(
+            "Yêu cầu whitelist đã bị từ chối."
+        )
+    elif status_value == 4:
+        st.warning(
+            "Quyền whitelist của ví đã bị thu hồi."
+        )
+
+    status_col_1, status_col_2 = (
+        st.columns(2)
+    )
+
+    status_col_1.metric(
+        "Whitelist Status",
+        status_name,
+    )
+
+    status_col_2.metric(
+        "Whitelisted",
+        (
+            "Yes"
+            if whitelist_info[
+                "is_whitelisted"
+            ]
+            else "No"
+        ),
+    )
+
+    request_allowed = (
+        status_value
+        in {
+            0,
+            3,
+            4,
+        }
+    )
+
+    st.button(
+        "Request Whitelist",
+        disabled=True,
+        use_container_width=True,
+        help=(
+            "Transaction signing will be activated "
+            "in the next step."
+            if request_allowed
+            else (
+                "The current whitelist status "
+                "does not allow a new request."
+            )
+        ),
+    )
+
+    with st.spinner(
+        "Loading connected investor position..."
+    ):
+        position = (
+            load_investor_position(
+                account
+            )
+        )
+
+    render_investor_portal(
+        {
+            "Connected Wallet": position,
+        }
+    )
+
+
+def render_bond_page() -> None:
+    render_heading(
+        "Bond Overview",
+        (
+            "Public terms, lifecycle and "
+            "offering progress"
+        ),
+    )
+
+    with st.spinner(
+        "Loading bond overview..."
+    ):
+        overview = load_bond_overview()
+
+    render_bond_overview(
+        overview
+    )
+
+
+def render_payment_page() -> None:
+    render_heading(
+        "Payment Schedule",
+        (
+            "Coupon and principal funding, "
+            "distribution and default timeline"
+        ),
+    )
+
+    overview = load_bond_overview()
+    issuer_dashboard = (
+        load_issuer_dashboard()
+    )
+
+    schedule = build_payment_schedule(
+        overview,
+        issuer_dashboard,
+    )
+
+    render_payment_schedule(
+        schedule
+    )
+
+
+def render_technical_page() -> None:
+    render_heading(
+        "Technical Status",
+        (
+            "Clean Sepolia V2 deployment "
+            "and contract references"
+        ),
+    )
+
+    client = get_blockchain_client()
+    network = client.get_network_status()
+    state = load_system_state()
+    contract_statuses = (
+        client
+        .get_all_contract_code_statuses()
+    )
+
+    metric_1, metric_2, metric_3, metric_4 = (
+        st.columns(4)
+    )
+
+    metric_1.metric(
+        "RPC",
+        (
             "Connected"
             if network.connected
             else "Disconnected"
         ),
     )
 
-    network_col_2.metric(
-        label="Chain ID",
-        value=network.chain_id,
+    metric_2.metric(
+        "Chain ID",
+        network.chain_id,
     )
 
-    network_col_3.metric(
-        label="Latest Block",
-        value=f"{network.latest_block:,}",
+    metric_3.metric(
+        "Latest Block",
+        f"{network.latest_block:,}",
     )
 
-    network_col_4.metric(
-        label="Gas Price",
-        value=(
-            f"{network.gas_price_gwei:.4f} Gwei"
-        ),
+    metric_4.metric(
+        "Lifecycle",
+        state.lifecycle_name,
     )
-
-    st.subheader("Contract Status")
 
     rows = [
         {
-            "Contract": status.contract_name,
-            "Address": status.address,
-            "Code": (
+            "Contract": item.contract_name,
+            "Address": item.address,
+            "Bytecode": (
                 "Available"
-                if status.has_code
+                if item.has_code
                 else "Missing"
             ),
-            "Bytecode Size": status.bytecode_size,
-            "Etherscan": etherscan_address_url(
-                status.address
+            "Size": item.bytecode_size,
+            "Etherscan": (
+                etherscan_address_url(
+                    item.address
+                )
             ),
         }
-        for status in contract_statuses
+        for item in contract_statuses
     ]
 
     st.dataframe(
@@ -367,115 +745,166 @@ def render_technical_status() -> None:
         },
     )
 
-    st.subheader("Base Deployment")
+    st.json(
+        {
+            "Admin": state.admin,
+            "Issuer": state.issuer,
+            "Payment Token": (
+                state.payment_token
+            ),
+            "Bond Token": state.bond_token,
+            "Controller": (
+                state.bond_token_controller
+            ),
+            "BondToken Owner": (
+                state.bond_token_owner
+            ),
+            "BondToken Supply": (
+                state.bond_token_supply
+            ),
+            "Total Subscribed": (
+                state.total_subscribed
+            ),
+            "Total Raised": (
+                str(
+                    state.total_raised_display
+                )
+            ),
+        }
+    )
 
+
+# ============================================================
+# Landing page: wallet first
+# ============================================================
+
+render_heading(
+    "Blockchain Bond Demo",
     (
-        state_col_1,
-        state_col_2,
-        state_col_3,
-        state_col_4,
-    ) = st.columns(4)
+        "Connect MetaMask to enter the role-based "
+        "bond application on Ethereum Sepolia"
+    ),
+)
 
-    state_col_1.metric(
-        label="Lifecycle",
-        value=system_state.lifecycle_name,
+st.caption(
+    "The Streamlit server never receives or stores "
+    "the wallet private key."
+)
+
+wallet = render_wallet_connector(
+    required_chain_id=(
+        SEPOLIA_CHAIN_ID_HEX
+    ),
+)
+
+if wallet.error:
+    st.warning(
+        wallet.error
     )
 
-    state_col_2.metric(
-        label="BondToken Supply",
-        value=system_state.bond_token_supply,
-    )
-
-    state_col_3.metric(
-        label="Total Subscribed",
-        value=system_state.total_subscribed,
-    )
-
-    state_col_4.metric(
-        label="Escrow",
-        value=(
-            f"{system_state.escrow_balance_display:,.2f} "
-            "BONDUSD"
-        ),
-    )
-
-    control_col_1, control_col_2 = (
-        st.columns(2)
-    )
-
-    with control_col_1:
-        st.json(
-            {
-                "Admin": system_state.admin,
-                "Issuer": system_state.issuer,
-                "Payment token": (
-                    system_state.payment_token
-                ),
-                "Bond token": (
-                    system_state.bond_token
-                ),
-            }
-        )
-
-    with control_col_2:
-        st.json(
-            {
-                "Controller": (
-                    system_state.bond_token_controller
-                ),
-                "BondToken owner": (
-                    system_state.bond_token_owner
-                ),
-                "Subscription paused": (
-                    system_state.subscription_paused
-                ),
-                "Proceeds withdrawn": (
-                    system_state.proceeds_withdrawn
-                ),
-            }
-        )
-
+if not wallet.installed:
     st.info(
-        "Technical Status is read-only and creates no transaction."
+        "Cài MetaMask extension trong trình duyệt, "
+        "sau đó tải lại trang."
     )
+    st.stop()
+
+if not wallet.connected:
+    st.info(
+        "Bước đầu tiên chỉ là kết nối ví. "
+        "Ứng dụng chưa hiển thị portal trước khi "
+        "MetaMask cấp quyền truy cập địa chỉ ví."
+    )
+    st.stop()
+
+if not Web3.is_address(
+    wallet.account
+):
+    st.error(
+        "MetaMask không trả về địa chỉ Ethereum hợp lệ."
+    )
+    st.stop()
+
+if (
+    wallet.chain_id.lower()
+    != SEPOLIA_CHAIN_ID_HEX.lower()
+):
+    st.warning(
+        "MetaMask đang ở sai mạng. "
+        "Bấm **Switch to Sepolia** trong khung MetaMask."
+    )
+    st.stop()
 
 
 # ============================================================
-# Sidebar navigation
+# Role-based routing
 # ============================================================
+
+connected_account = (
+    Web3.to_checksum_address(
+        wallet.account
+    )
+)
+
+role = determine_role(
+    connected_account
+)
+
+render_wallet_identity(
+    wallet,
+    role,
+)
 
 with st.sidebar:
     st.header(
         "Blockchain Bond Demo"
     )
 
-    st.caption(
-        "Ethereum Sepolia"
+    st.write(
+        f"**Role:** {role}"
     )
 
-    page = st.radio(
-        "Navigation",
-        options=[
-            "Bond Overview",
-            "Investor Portal",
-            "Issuer Dashboard",
-            "Admin Dashboard",
-            "Payment Schedule",
-            "Compliance and Audit",
-            "Technical Status",
-        ],
-        key="main_navigation",
+    st.code(
+        shorten_address(
+            connected_account
+        ),
+        language=None,
     )
-
-    st.divider()
 
     st.write(
         f"**Network:** {NETWORK_NAME}"
     )
 
     st.write(
-        "**Chain ID:** 11155111"
+        f"**Chain ID:** {CHAIN_ID}"
     )
+
+    if role == "ADMIN":
+        page_options = [
+            "Admin Portal",
+            "Bond Overview",
+            "Technical Status",
+        ]
+    elif role == "ISSUER":
+        page_options = [
+            "Issuer Portal",
+            "Bond Overview",
+            "Payment Schedule",
+            "Technical Status",
+        ]
+    else:
+        page_options = [
+            "Investor Portal",
+            "Bond Overview",
+            "Technical Status",
+        ]
+
+    page = st.radio(
+        "Navigation",
+        options=page_options,
+    )
+
+    st.divider()
 
     st.link_button(
         "Sepolia Etherscan",
@@ -483,273 +912,59 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    st.divider()
-
-    st.write(
-        "**BondUSDToken**"
+    st.caption(
+        "Change account or network directly in MetaMask."
     )
-
-    st.code(
-        shorten_address(
-            BOND_USD_ADDRESS
-        ),
-        language=None,
-    )
-
-    st.write(
-        "**BondToken**"
-    )
-
-    st.code(
-        shorten_address(
-            BOND_TOKEN_ADDRESS
-        ),
-        language=None,
-    )
-
-    st.write(
-        "**TokenizedBond**"
-    )
-
-    st.code(
-        shorten_address(
-            TOKENIZED_BOND_ADDRESS
-        ),
-        language=None,
-    )
-
-    st.divider()
 
     if st.button(
         "Refresh on-chain data",
         use_container_width=True,
-        type="primary",
     ):
         clear_dynamic_cache()
         st.rerun()
 
-    if st.button(
-        "Clear all cache",
-        use_container_width=True,
-    ):
-        clear_all_cache()
-        st.rerun()
-
-
-# ============================================================
-# Page routing
-# ============================================================
+started_at = time.perf_counter()
 
 try:
-    started_at = time.perf_counter()
+    if page == "Admin Portal":
+        render_admin_home()
 
-    if page == "Bond Overview":
-        render_page_heading(
-            "Blockchain Bond Demo",
-            (
-                "Financial terms, offering progress "
-                "and lifecycle overview"
-            ),
-        )
-
-        with st.spinner(
-            "Loading bond overview..."
-        ):
-            overview = load_bond_overview()
-
-        render_bond_overview(
-            overview
-        )
+    elif page == "Issuer Portal":
+        render_issuer_home()
 
     elif page == "Investor Portal":
-        render_page_heading(
-            "Investor Portal",
-            (
-                "Read-only investor balances, positions "
-                "and claimable rights"
-            ),
+        render_investor_home(
+            connected_account
         )
 
-        with st.spinner(
-            "Loading investor positions..."
-        ):
-            investor_positions = {
-                "Investor 1": (
-                    load_investor_position(
-                        INVESTOR_1_ADDRESS,
-                        "Investor 1",
-                    )
-                ),
-                "Investor 2": (
-                    load_investor_position(
-                        INVESTOR_2_ADDRESS,
-                        "Investor 2",
-                    )
-                ),
-            }
-
-        render_investor_portal(
-            investor_positions
-        )
-
-    elif page == "Issuer Dashboard":
-        render_page_heading(
-            "Issuer Dashboard",
-            (
-                "Offering proceeds, coupon obligations "
-                "and principal repayment"
-            ),
-        )
-
-        with st.spinner(
-            "Loading issuer data..."
-        ):
-            issuer_dashboard = (
-                load_issuer_dashboard()
-            )
-
-        render_issuer_dashboard(
-            issuer_dashboard
-        )
-
-    elif page == "Admin Dashboard":
-        render_page_heading(
-            "Admin Dashboard",
-            (
-                "Whitelist inspection and permissioned "
-                "subscription controls"
-            ),
-        )
-
-        with st.spinner(
-            "Loading admin data..."
-        ):
-            admin_dashboard = (
-                load_admin_dashboard()
-            )
-
-        render_admin_dashboard(
-            admin_dashboard,
-            get_blockchain_client(),
-        )
+    elif page == "Bond Overview":
+        render_bond_page()
 
     elif page == "Payment Schedule":
-        render_page_heading(
-            "Payment Schedule",
-            (
-                "Coupon and principal funding, distribution "
-                "and default timeline"
-            ),
-        )
-
-        with st.spinner(
-            "Loading payment obligations..."
-        ):
-            overview = load_bond_overview()
-            issuer_dashboard = (
-                load_issuer_dashboard()
-            )
-
-            payment_schedule = (
-                build_payment_schedule(
-                    overview,
-                    issuer_dashboard,
-                )
-            )
-
-        render_payment_schedule(
-            payment_schedule
-        )
-
-    elif page == "Compliance and Audit":
-        render_page_heading(
-            "Compliance and Audit",
-            (
-                "Deployment, role, supply and financial "
-                "reconciliation checks"
-            ),
-        )
-
-        with st.spinner(
-            "Running read-only audit..."
-        ):
-            network = load_network_status()
-
-            contract_statuses = (
-                load_contract_statuses()
-            )
-
-            system_state = (
-                load_system_state()
-            )
-
-            overview = (
-                load_bond_overview()
-            )
-
-            issuer_dashboard = (
-                load_issuer_dashboard()
-            )
-
-            investor_positions = {
-                "Investor 1": (
-                    load_investor_position(
-                        INVESTOR_1_ADDRESS,
-                        "Investor 1",
-                    )
-                ),
-                "Investor 2": (
-                    load_investor_position(
-                        INVESTOR_2_ADDRESS,
-                        "Investor 2",
-                    )
-                ),
-            }
-
-            compliance_report = (
-                build_compliance_report(
-                    chain_id=network.chain_id,
-                    contract_statuses=(
-                        contract_statuses
-                    ),
-                    system_state=system_state,
-                    overview=overview,
-                    issuer_dashboard=(
-                        issuer_dashboard
-                    ),
-                    investor_positions=(
-                        investor_positions
-                    ),
-                )
-            )
-
-        render_compliance_audit(
-            compliance_report
-        )
+        render_payment_page()
 
     elif page == "Technical Status":
-        render_page_heading(
-            "Technical Status",
-            (
-                "RPC, deployed bytecode and base "
-                "contract configuration"
-            ),
-        )
+        render_technical_page()
 
-        with st.spinner(
-            "Loading technical status..."
-        ):
-            render_technical_status()
+    elapsed = (
+        time.perf_counter()
+        - started_at
+    )
 
-    render_load_time(
-        started_at
+    st.markdown(
+        (
+            '<div class="load-time">'
+            f"Page load time: {elapsed:.3f} seconds"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
     )
 
     st.divider()
 
     st.caption(
-        "Read-only local application. No private key is loaded "
-        "and no transaction is signed by Streamlit."
+        "MetaMask provides the connected account and network. "
+        "Transaction signing remains disabled in this checkpoint."
     )
 
 except BlockchainError as exc:
@@ -760,11 +975,6 @@ except BlockchainError as exc:
     st.code(
         str(exc),
         language=None,
-    )
-
-    st.warning(
-        "Kiểm tra SEPOLIA_RPC_URL, kết nối Internet, "
-        "deployment file và ABI."
     )
 
 except Exception as exc:
