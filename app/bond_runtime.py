@@ -14,7 +14,7 @@ import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SERIES_FILE = PROJECT_ROOT / "deployment" / "bond_series.json"
-MAIN_APP_FILE = PROJECT_ROOT / "app" / "streamlit_app.py"
+MAIN_APP_FILE = PROJECT_ROOT / "app" / "bond_app_template.py"
 
 # Giữ bản config/overview gốc để khôi phục sau mỗi lần chạy trang bond.
 _BASE_CONFIG = importlib.import_module("app.config")
