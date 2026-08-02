@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import importlib
 import json
-import runpy
 import sys
 import types
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+import streamlit as st
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -244,6 +245,58 @@ def _clear_dependent_modules() -> None:
                 pass
 
 
+def _no_cache_decorator(
+    function: Callable[..., Any] | None = None,
+    **_: Any,
+) -> Any:
+    """
+    Tắt cache cho các trang bond động.
+
+    Các dataclass được tạo lại theo từng bond không nên được pickle bởi
+    st.cache_data, đồng thời BlockchainClient cũng không được dùng lại giữa
+    hai contract khác nhau.
+    """
+
+    def decorate(
+        target: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        setattr(target, "clear", lambda: None)
+        return target
+
+    if function is not None and callable(function):
+        return decorate(function)
+
+    return decorate
+
+
+def _prepare_app_source(
+    bond_name: str,
+) -> str:
+    source = MAIN_APP_FILE.read_text(
+        encoding="utf-8"
+    )
+
+    source = source.replace(
+        'page_title="Blockchain Bond Demo"',
+        f'page_title="{bond_name}"',
+        1,
+    )
+
+    source = source.replace(
+        'render_heading(\n    "Blockchain Bond Demo",',
+        f'render_heading(\n    "{bond_name}",',
+        1,
+    )
+
+    source = source.replace(
+        'st.header(\n        "Blockchain Bond Demo"\n    )',
+        f'st.header(\n        "{bond_name}"\n    )',
+        1,
+    )
+
+    return source
+
+
 def run_bond_app(bond_key: str) -> None:
     series = _read_series()
     bond = _find_bond(series, bond_key)
@@ -267,7 +320,37 @@ def run_bond_app(bond_key: str) -> None:
         setattr(app_package, "config", config_module)
         setattr(app_package, "overview", overview_module)
 
-    runpy.run_path(
-        str(MAIN_APP_FILE),
-        run_name="__main__",
+    bond_name = str(
+        bond.get("displayName", "Bond")
     )
+    source = _prepare_app_source(
+        bond_name
+    )
+
+    original_cache_data = st.cache_data
+    original_cache_resource = st.cache_resource
+
+    st.cache_data = _no_cache_decorator
+    st.cache_resource = _no_cache_decorator
+
+    try:
+        compiled = compile(
+            source,
+            str(MAIN_APP_FILE),
+            "exec",
+        )
+
+        namespace = {
+            "__name__": "__main__",
+            "__file__": str(MAIN_APP_FILE),
+            "__package__": None,
+        }
+
+        exec(
+            compiled,
+            namespace,
+            namespace,
+        )
+    finally:
+        st.cache_data = original_cache_data
+        st.cache_resource = original_cache_resource
