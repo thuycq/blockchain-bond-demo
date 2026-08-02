@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+import threading
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -15,9 +16,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SERIES_FILE = PROJECT_ROOT / "deployment" / "bond_series.json"
 MAIN_APP_FILE = PROJECT_ROOT / "app" / "streamlit_app.py"
 
-# Giữ bản config/overview gốc để tạo từng phiên chạy độc lập.
+# Giữ bản config/overview gốc để khôi phục sau mỗi lần chạy trang bond.
 _BASE_CONFIG = importlib.import_module("app.config")
 _BASE_OVERVIEW = importlib.import_module("app.overview")
+
+# sys.modules là trạng thái dùng chung của toàn bộ tiến trình Streamlit.
+# Khóa này ngăn hai trang bond thay config cùng lúc.
+_RUNTIME_LOCK = threading.RLock()
 
 
 def _read_series() -> dict[str, Any]:
@@ -245,17 +250,25 @@ def _clear_dependent_modules() -> None:
                 pass
 
 
+def _restore_base_modules() -> None:
+    """Không để config của bond vừa mở rò sang trang bond kế tiếp."""
+    _clear_dependent_modules()
+
+    sys.modules["app.config"] = _BASE_CONFIG
+    sys.modules["app.overview"] = _BASE_OVERVIEW
+
+    app_package = sys.modules.get("app")
+
+    if app_package is not None:
+        setattr(app_package, "config", _BASE_CONFIG)
+        setattr(app_package, "overview", _BASE_OVERVIEW)
+
+
 def _no_cache_decorator(
     function: Callable[..., Any] | None = None,
     **_: Any,
 ) -> Any:
-    """
-    Tắt cache cho các trang bond động.
-
-    Các dataclass được tạo lại theo từng bond không nên được pickle bởi
-    st.cache_data, đồng thời BlockchainClient cũng không được dùng lại giữa
-    hai contract khác nhau.
-    """
+    """Tắt cache cho các trang bond động."""
 
     def decorate(
         target: Callable[..., Any],
@@ -270,6 +283,7 @@ def _no_cache_decorator(
 
 
 def _prepare_app_source(
+    bond_key: str,
     bond_name: str,
 ) -> str:
     source = MAIN_APP_FILE.read_text(
@@ -294,63 +308,96 @@ def _prepare_app_source(
         1,
     )
 
+    # Mỗi bond dùng một MetaMask component key riêng để không mang trạng thái
+    # của trang trước sang trang sau.
+    source = source.replace(
+        "wallet = render_wallet_connector(\n",
+        (
+            "wallet = render_wallet_connector(\n"
+            f'    key="bond_wallet_connector_{bond_key}",\n'
+        ),
+        1,
+    )
+
     return source
 
 
+def _reset_cross_bond_session_state(
+    bond_key: str,
+) -> None:
+    previous_bond = st.session_state.get(
+        "_active_bond_key"
+    )
+
+    if previous_bond == bond_key:
+        return
+
+    st.session_state["_active_bond_key"] = bond_key
+    st.session_state["wallet_transaction_request"] = None
+    st.session_state["last_wallet_transaction"] = None
+
+
 def run_bond_app(bond_key: str) -> None:
-    series = _read_series()
-    bond = _find_bond(series, bond_key)
+    with _RUNTIME_LOCK:
+        series = _read_series()
+        bond = _find_bond(series, bond_key)
 
-    config_module = _build_config_module(
-        series,
-        bond,
-    )
-    overview_module = _build_overview_module(
-        bond
-    )
-
-    _clear_dependent_modules()
-
-    sys.modules["app.config"] = config_module
-    sys.modules["app.overview"] = overview_module
-
-    app_package = sys.modules.get("app")
-
-    if app_package is not None:
-        setattr(app_package, "config", config_module)
-        setattr(app_package, "overview", overview_module)
-
-    bond_name = str(
-        bond.get("displayName", "Bond")
-    )
-    source = _prepare_app_source(
-        bond_name
-    )
-
-    original_cache_data = st.cache_data
-    original_cache_resource = st.cache_resource
-
-    st.cache_data = _no_cache_decorator
-    st.cache_resource = _no_cache_decorator
-
-    try:
-        compiled = compile(
-            source,
-            str(MAIN_APP_FILE),
-            "exec",
+        _reset_cross_bond_session_state(
+            bond_key
         )
 
-        namespace = {
-            "__name__": "__main__",
-            "__file__": str(MAIN_APP_FILE),
-            "__package__": None,
-        }
-
-        exec(
-            compiled,
-            namespace,
-            namespace,
+        config_module = _build_config_module(
+            series,
+            bond,
         )
-    finally:
-        st.cache_data = original_cache_data
-        st.cache_resource = original_cache_resource
+        overview_module = _build_overview_module(
+            bond
+        )
+
+        _clear_dependent_modules()
+
+        sys.modules["app.config"] = config_module
+        sys.modules["app.overview"] = overview_module
+
+        app_package = sys.modules.get("app")
+
+        if app_package is not None:
+            setattr(app_package, "config", config_module)
+            setattr(app_package, "overview", overview_module)
+
+        bond_name = str(
+            bond.get("displayName", "Bond")
+        )
+        source = _prepare_app_source(
+            bond_key,
+            bond_name,
+        )
+
+        original_cache_data = st.cache_data
+        original_cache_resource = st.cache_resource
+
+        st.cache_data = _no_cache_decorator
+        st.cache_resource = _no_cache_decorator
+
+        try:
+            compiled = compile(
+                source,
+                str(MAIN_APP_FILE),
+                "exec",
+            )
+
+            namespace = {
+                "__name__": "__main__",
+                "__file__": str(MAIN_APP_FILE),
+                "__package__": None,
+            }
+
+            exec(
+                compiled,
+                namespace,
+                namespace,
+            )
+        finally:
+            st.cache_data = original_cache_data
+            st.cache_resource = original_cache_resource
+            _restore_base_modules()
