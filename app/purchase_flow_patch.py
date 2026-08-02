@@ -46,52 +46,66 @@ _NEW_GUIDANCE = '''    elif allowance_raw < payment_raw:
         )
 '''
 
+# Luôn lưu hàm gốc một lần duy nhất trên module bond_runtime.
+# Điều này ngăn wrapper bị bọc lặp sau các lần Streamlit rerun.
+if not hasattr(
+    bond_runtime,
+    "_purchase_flow_original_prepare",
+):
+    bond_runtime._purchase_flow_original_prepare = (
+        bond_runtime._prepare_app_source
+    )
 
-def _patched_prepare_factory(
-    original_prepare: Callable[[str, str], str],
-) -> Callable[[str, str], str]:
-    def patched_prepare(
-        bond_key: str,
-        bond_name: str,
-    ) -> str:
-        source = original_prepare(
-            bond_key,
-            bond_name,
-        )
+_BASE_PREPARE: Callable[[str, str], str] = (
+    bond_runtime._purchase_flow_original_prepare
+)
 
-        if _OLD_APPROVE_READY not in source:
-            raise RuntimeError(
-                "Không tìm thấy khối approve_ready trong bond app template."
-            )
 
+def _prepare_patched_source(
+    bond_key: str,
+    bond_name: str,
+) -> str:
+    source = _BASE_PREPARE(
+        bond_key,
+        bond_name,
+    )
+
+    if _OLD_APPROVE_READY in source:
         source = source.replace(
             _OLD_APPROVE_READY,
             _NEW_APPROVE_READY,
             1,
         )
+    elif _NEW_APPROVE_READY not in source:
+        raise RuntimeError(
+            "Không tìm thấy khối approve_ready trong bond app template."
+        )
 
-        if _OLD_GUIDANCE not in source:
-            raise RuntimeError(
-                "Không tìm thấy khối hướng dẫn approve trong bond app template."
-            )
-
-        return source.replace(
+    if _OLD_GUIDANCE in source:
+        source = source.replace(
             _OLD_GUIDANCE,
             _NEW_GUIDANCE,
             1,
         )
+    elif _NEW_GUIDANCE not in source:
+        raise RuntimeError(
+            "Không tìm thấy khối hướng dẫn approve trong bond app template."
+        )
 
-    return patched_prepare
+    return source
 
 
 def run_bond_app(bond_key: str) -> None:
-    """Run one bond page with the corrected investor approval logic."""
-    original_prepare = bond_runtime._prepare_app_source
-    bond_runtime._prepare_app_source = _patched_prepare_factory(
-        original_prepare
+    """Run one bond page with corrected investor approval logic."""
+    bond_runtime._prepare_app_source = (
+        _prepare_patched_source
     )
 
     try:
-        bond_runtime.run_bond_app(bond_key)
+        bond_runtime.run_bond_app(
+            bond_key
+        )
     finally:
-        bond_runtime._prepare_app_source = original_prepare
+        bond_runtime._prepare_app_source = (
+            _BASE_PREPARE
+        )
