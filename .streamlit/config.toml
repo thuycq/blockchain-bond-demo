@@ -5,5 +5,8 @@ runOnSave = true
 [runner]
 fastReruns = true
 
+[client]
+showSidebarNavigation = false
+
 [browser]
 gatherUsageStats = false
