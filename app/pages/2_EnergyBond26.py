@@ -16,6 +16,11 @@ st.markdown(
             content: "Demo Bond";
             font-size: 0.95rem !important;
         }
+
+        div[data-testid="stTabs"] div[role="tabpanel"]:first-of-type
+        [data-testid="stCaptionContainer"] {
+            display: none !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
