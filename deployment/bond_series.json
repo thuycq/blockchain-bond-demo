@@ -1,0 +1,151 @@
+{
+  "version": "v2-four-project-bonds",
+  "network": "sepolia",
+  "chainId": 11155111,
+  "generatedAt": "2026-08-02T10:51:50.666Z",
+  "roles": {
+    "deployer": "0x09428D10764503E9158374e556398b409d37381E",
+    "admin": "0x09428D10764503E9158374e556398b409d37381E",
+    "issuer": "0x9D4C235100Ddfd5d61326769e16b2BB9dE04074e",
+    "bondUsdOwner": "0x09428D10764503E9158374e556398b409d37381E"
+  },
+  "paymentToken": {
+    "address": "0xcDe41c009D3fFd58CaA9a4CC561155c2616B7D7D",
+    "name": "Bond USD",
+    "symbol": "BONDUSD",
+    "decimals": 18
+  },
+  "bonds": [
+    {
+      "key": "demoBond26",
+      "displayName": "DemoBond26",
+      "symbol": "DBOND26",
+      "tokenName": "Demo Corporate Bond Token 2026",
+      "contracts": {
+        "BondToken": {
+          "address": "0x51dD2F4e79918Bbb2Cf8395ED381CE876549A663",
+          "deploymentTransactionHash": "0x8c20e83a4f8c2893e9566264997261d50ca2b4c61570aac6bdaedaddbc7a3f0b",
+          "deploymentBlock": 11366877,
+          "deploymentGasUsed": "659033"
+        },
+        "TokenizedBond": {
+          "address": "0xAd8Cb40a7685a64f26ad6E0bf96a3862F78e2aa4",
+          "deploymentTransactionHash": "0x9225946b8baabacd007a41f424f2688711971ed1725b59b320da23d330f5930c",
+          "deploymentBlock": 11366878,
+          "deploymentGasUsed": "4335086"
+        }
+      },
+      "configurationTransactions": {
+        "setController": {
+          "transactionHash": "0x082d263dee9193fb0e230088d1b946025c33200dc9ab3f81dd77dc6ed9ee87cf",
+          "blockNumber": 11366879,
+          "gasUsed": "47424"
+        },
+        "renounceOwnership": {
+          "transactionHash": "0xe8b9d8f42ec424680124a123ac42490b861be65bc3cd10142b5fef58ed64dab0",
+          "blockNumber": 11366880,
+          "gasUsed": "23294"
+        }
+      }
+    },
+    {
+      "key": "greenBond26",
+      "displayName": "GreenBond26",
+      "symbol": "GBOND26",
+      "tokenName": "Green Bond Token 2026",
+      "tokenDecimals": 0,
+      "contracts": {
+        "BondToken": {
+          "address": "0x8015172f5beFE08331C1ea2837fa33B162d9545c",
+          "transactionHash": "0xaee8b522e822fc8cf1281686dd3f76965d96882c6f2a43d1f0557a7f1eeefdb0",
+          "blockNumber": 11402912,
+          "gasUsed": "663775"
+        },
+        "TokenizedBond": {
+          "address": "0xD97Fc5a1DFAFDD386F818E72565C5Ac2a83E0e6D",
+          "transactionHash": "0xb453a005a9817ceabaaddacb31a11ce08589a53eaba7c443c4685fdbc4811738",
+          "blockNumber": 11402913,
+          "gasUsed": "4335086"
+        }
+      },
+      "configurationTransactions": {
+        "setController": {
+          "transactionHash": "0x61ebb87655574f7ec96cc4514311af19adfb544cc5024a17879ec0c2261e0013",
+          "blockNumber": 11402914,
+          "gasUsed": "47424"
+        },
+        "renounceOwnership": {
+          "transactionHash": "0x4df8419dc325a958b023d97d4be9ddd7a3c72e8857f444f09f90e7315e2c7554",
+          "blockNumber": 11402915,
+          "gasUsed": "23294"
+        }
+      }
+    },
+    {
+      "key": "energyBond26",
+      "displayName": "EnergyBond26",
+      "symbol": "EBOND26",
+      "tokenName": "Energy Bond Token 2026",
+      "tokenDecimals": 0,
+      "contracts": {
+        "BondToken": {
+          "address": "0x930AdE69948aB39c4DA4880869212d8479f6A551",
+          "transactionHash": "0xd2109705412a4277c14e640a1838621e702efaa2e48c78d7de936489a08f411e",
+          "blockNumber": 11402916,
+          "gasUsed": "663787"
+        },
+        "TokenizedBond": {
+          "address": "0x53DbdC027FF8cF8D9F3E5669517ba4C24Cb1c679",
+          "transactionHash": "0x15c0f7a9174e2ec14c5bccd251cc2127139c5e9d5d75c532af05ad7094f7a5e5",
+          "blockNumber": 11402917,
+          "gasUsed": "4335086"
+        }
+      },
+      "configurationTransactions": {
+        "setController": {
+          "transactionHash": "0x5ddda025a632020f9c4b771e3370e784057fd4fb8a001bb4f2848b69e2edce7c",
+          "blockNumber": 11402918,
+          "gasUsed": "47424"
+        },
+        "renounceOwnership": {
+          "transactionHash": "0x3508b64498b70b9ec10f044f3878eb8394c58032f4f5cc415911f06b72af69c0",
+          "blockNumber": 11402919,
+          "gasUsed": "23294"
+        }
+      }
+    },
+    {
+      "key": "eduBond26",
+      "displayName": "EduBond26",
+      "symbol": "EDUB26",
+      "tokenName": "Education Bond Token 2026",
+      "tokenDecimals": 0,
+      "contracts": {
+        "BondToken": {
+          "address": "0x5900ADEafc8976C73507921F41cB2AB3255bd8E2",
+          "transactionHash": "0x39fadf70a6afec1c99e09b26f4b67fb62bbabdae2d206c067f65b304a93cbd98",
+          "blockNumber": 11402920,
+          "gasUsed": "663811"
+        },
+        "TokenizedBond": {
+          "address": "0xaE99F2841FAd753E2eC4E2D6ba5253079A8483d5",
+          "transactionHash": "0x121d872c04e48e821c12b02888eebedb6d83665f8992dc8f61a57afe53a84614",
+          "blockNumber": 11402921,
+          "gasUsed": "4335074"
+        }
+      },
+      "configurationTransactions": {
+        "setController": {
+          "transactionHash": "0x2c8820905527bcded57903a24b17ef0e3bb75360e5cf2a523dc32a00b4cd8714",
+          "blockNumber": 11402922,
+          "gasUsed": "47424"
+        },
+        "renounceOwnership": {
+          "transactionHash": "0x395e1cf638e0f19970562a7394ab36a13e5a3e60c3a84c6d9be5f700d281f138",
+          "blockNumber": 11402923,
+          "gasUsed": "23294"
+        }
+      }
+    }
+  ]
+}
