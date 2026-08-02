@@ -1,15 +1,22 @@
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+import streamlit as st
 
 from app.bond_runtime import run_bond_app
 
 
 run_bond_app("energyBond26")
+
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebarNav"] ul li:first-child a {
+            font-size: 0 !important;
+        }
+
+        [data-testid="stSidebarNav"] ul li:first-child a::after {
+            content: "Demo Bond";
+            font-size: 0.95rem !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
