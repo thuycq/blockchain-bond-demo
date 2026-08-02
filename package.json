@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "compile": "hardhat compile",
+    "redeploy:green-energy:sepolia": "hardhat --network sepolia run scripts/redeploy_green_energy_bonds_sepolia.js"
   },
   "keywords": [],
   "type": "commonjs",
