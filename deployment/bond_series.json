@@ -2,7 +2,7 @@
   "version": "v2-four-project-bonds",
   "network": "sepolia",
   "chainId": 11155111,
-  "generatedAt": "2026-08-02T10:51:50.666Z",
+  "generatedAt": "2026-08-02T15:10:37.285Z",
   "roles": {
     "deployer": "0x09428D10764503E9158374e556398b409d37381E",
     "admin": "0x09428D10764503E9158374e556398b409d37381E",
@@ -54,29 +54,30 @@
       "symbol": "GBOND26",
       "tokenName": "Green Bond Token 2026",
       "tokenDecimals": 0,
+      "redeployedAt": "2026-08-02T15:10:37.285Z",
       "contracts": {
         "BondToken": {
-          "address": "0x8015172f5beFE08331C1ea2837fa33B162d9545c",
-          "transactionHash": "0xaee8b522e822fc8cf1281686dd3f76965d96882c6f2a43d1f0557a7f1eeefdb0",
-          "blockNumber": 11402912,
+          "address": "0xb823031f3BDe1275729166622c32A0ef24E1aCC2",
+          "transactionHash": "0xc3b84996f5671c5cd6d6d12b1f28e74f77a740c363636c7e9f2b15cb57709cc1",
+          "blockNumber": 11404177,
           "gasUsed": "663775"
         },
         "TokenizedBond": {
-          "address": "0xD97Fc5a1DFAFDD386F818E72565C5Ac2a83E0e6D",
-          "transactionHash": "0xb453a005a9817ceabaaddacb31a11ce08589a53eaba7c443c4685fdbc4811738",
-          "blockNumber": 11402913,
+          "address": "0xcE6580D7265D85DB9fB024A7E75c0A38D2BbFE1D",
+          "transactionHash": "0x2972dfc216c89a1706efebf708aa10e57f90607461bcd4d448f858e080f935af",
+          "blockNumber": 11404178,
           "gasUsed": "4335086"
         }
       },
       "configurationTransactions": {
         "setController": {
-          "transactionHash": "0x61ebb87655574f7ec96cc4514311af19adfb544cc5024a17879ec0c2261e0013",
-          "blockNumber": 11402914,
+          "transactionHash": "0xbba29225c79df4fb5ad8450a84d1bb9c1e246148008f1ddbc4fddc15b7d0a04b",
+          "blockNumber": 11404179,
           "gasUsed": "47424"
         },
         "renounceOwnership": {
-          "transactionHash": "0x4df8419dc325a958b023d97d4be9ddd7a3c72e8857f444f09f90e7315e2c7554",
-          "blockNumber": 11402915,
+          "transactionHash": "0xdb2f8e5b87dc69e7404ff2e9a5dd9e2dde9ff8a526d40db7d06a643525dc3423",
+          "blockNumber": 11404180,
           "gasUsed": "23294"
         }
       }
@@ -147,5 +148,12 @@
         }
       }
     }
-  ]
+  ],
+  "lastReplacement": {
+    "key": "greenBond26",
+    "oldBondToken": "0x8015172f5beFE08331C1ea2837fa33B162d9545c",
+    "oldTokenizedBond": "0xD97Fc5a1DFAFDD386F818E72565C5Ac2a83E0e6D",
+    "newBondToken": "0xb823031f3BDe1275729166622c32A0ef24E1aCC2",
+    "newTokenizedBond": "0xcE6580D7265D85DB9fB024A7E75c0A38D2BbFE1D"
+  }
 }
